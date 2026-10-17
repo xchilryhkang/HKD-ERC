@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+fsce_net/
+
+# Datasets (download separately, see README)
+dataset/
+
+# Training outputs: logs, checkpoints, tuning sweep results, analysis plots
+output/
+
+# Model weights, in case saved outside output/
+*.pt
+*.pth
+
+# Local backup of the old (unrelated) nested repo, not meant to be committed
+.git.old-fsce-net-backup/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Jupyter (for Kaggle notebook work)
+.ipynb_checkpoints/
