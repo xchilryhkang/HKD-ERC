@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.utils import softmax as scatter_softmax
 
-from erc.models.graph import utterance_to_conversation
+from src.models.graph import utterance_to_conversation
 
 
 class ContextGraphLayer(nn.Module):

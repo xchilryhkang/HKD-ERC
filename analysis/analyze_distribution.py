@@ -13,13 +13,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Make the repo root importable so `erc` / `train` resolve from any cwd.
+# Make the repo root importable so `src` / `train` resolve from any cwd.
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from erc import path
-from erc.utils import get_loaders, build_model, random_mask, generate_inputs, load_teacher_checkpoint, set_seed
+from src import path
+from src.utils import get_loaders, build_model, random_mask, generate_inputs, load_teacher_checkpoint, set_seed
 from train.train_student import concat_repr
 
 EPS = 1e-12

@@ -67,7 +67,7 @@ script implements the right one for it):
 
 ```
 .
-├── erc/                            # the importable library — never run directly
+├── src/                            # the importable library — never run directly
 │   ├── path.py                     # dataset/output path configuration
 │   ├── utils.py                    # loaders, optimizer/seed helpers, checkpoint I/O
 │   ├── models/
@@ -111,7 +111,7 @@ script implements the right one for it):
 └── requirements.txt                # Pip-only install (e.g. for Kaggle/Colab notebooks)
 ```
 
-Everything under `erc/` is library code imported as `from erc.utils import ...`;
+Everything under `src/` is library code imported as `from src.utils import ...`;
 everything under `train/`, `tune/` and `analysis/` is an entry point you run directly.
 Entry points put the repo root on `sys.path` themselves, so they work from any working
 directory without installing the package.
@@ -175,7 +175,7 @@ dataset/
   train(1038)/valid(114)/test(280) split. Audio/visual originate from the **MMGCN**
   features.
 
-If your paths differ, edit `erc/path.py` directly (it resolves everything relative to
+If your paths differ, edit `src/path.py` directly (it resolves everything relative to
 the repo root by default, so no absolute paths are hardcoded).
 
 ## How to Run

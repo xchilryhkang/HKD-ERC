@@ -15,10 +15,10 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 from sklearn.preprocessing import OneHotEncoder
 
-from erc import path
-from erc.models.model import HypergraphERCModel
-from erc.data.dataloader_iemocap import IEMOCAPDataset
-from erc.data.dataloader_meld import MELDRobertaDataset
+from src import path
+from src.models.model import HypergraphERCModel
+from src.data.dataloader_iemocap import IEMOCAPDataset
+from src.data.dataloader_meld import MELDRobertaDataset
 
 import sys
 import copy

@@ -1,6 +1,6 @@
 import os
 
-# This file lives in erc/, so the repo root (which holds dataset/ and
+# This file lives in src/, so the repo root (which holds dataset/ and
 # output/) is one level up from it.
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATASET_ROOT = os.path.join(BASE, 'dataset')

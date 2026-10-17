@@ -7,15 +7,15 @@ import copy
 import numpy as np
 import torch
 
-# Make the repo root importable so `erc` / `train` resolve from any cwd.
+# Make the repo root importable so `src` / `train` resolve from any cwd.
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from erc import path
-from erc.utils import get_loaders_meld, build_model, load_teacher_checkpoint, make_optimizer, set_seed
-from erc.losses.loss import MaskedCELoss
-from erc.losses.kd_losses import (
+from src import path
+from src.utils import get_loaders_meld, build_model, load_teacher_checkpoint, make_optimizer, set_seed
+from src.losses.loss import MaskedCELoss
+from src.losses.kd_losses import (
     MaskedKLLoss, PrototypeRelationLoss, SinkhornOTLoss, compute_ot_cost_matrix, NodeRelationLoss
 )
 from train.train_student import compute_teacher_prototypes, train_or_eval_student

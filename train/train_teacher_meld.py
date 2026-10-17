@@ -9,14 +9,14 @@ import numpy as np
 import torch
 import torch.optim as optim
 
-# Make the repo root importable so `erc` / `train` resolve from any cwd.
+# Make the repo root importable so `src` / `train` resolve from any cwd.
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from erc import path
-from erc.utils import Logger, get_loaders_meld, build_model, save_teacher_checkpoint, make_optimizer, set_seed
-from erc.losses.loss import MaskedCELoss
+from src import path
+from src.utils import Logger, get_loaders_meld, build_model, save_teacher_checkpoint, make_optimizer, set_seed
+from src.losses.loss import MaskedCELoss
 from train.train_teacher import train_or_eval_model
 
 

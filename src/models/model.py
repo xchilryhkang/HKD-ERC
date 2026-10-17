@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from erc.models.graph import batch_graphify
-from erc.models.prompt import MissingModalityPrompt, ConditionalPrototypePrompt
-from erc.models.context_graph import ContextGraphStack
-from erc.models.vue import VUEFusion
-from erc.models.hypergraph import HypergraphStack
+from src.models.graph import batch_graphify
+from src.models.prompt import MissingModalityPrompt, ConditionalPrototypePrompt
+from src.models.context_graph import ContextGraphStack
+from src.models.vue import VUEFusion
+from src.models.hypergraph import HypergraphStack
 
 
 class HypergraphERCModel(nn.Module):
