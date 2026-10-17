@@ -1,19 +1,4 @@
-# Runs train_student_iemocap.py for IEMOCAPSix -- 5-fold leave-one-session-
-# out CV, best checkpoint = best session-out F1 (early stopping tracks the
-# held-out session directly every epoch; see train_student_iemocap.py's
-# module docstring for why there's no separate validation session under
-# this protocol). Requires a teacher checkpoint for IEMOCAPSix to already
-# exist under output/model/teacher/ -- run run_teacher_iemocap6.ps1 first
-# if it doesn't.
-#
-# Usage (PowerShell): .\run_student_iemocap6.ps1 [-MaskRate <rate>] [-PromptType <type>]
-#                      [-LambdaProto <w>] [-LambdaRel <w>] [-Lr <lr>] [-L2 <l2>] [-Optimizer <adam|adamw>] [-Seed <n>]
-# MaskRate defaults to 0.1, PromptType defaults to "none". Distillation loss
-# is 4 clusters (CE, prob, proto, rel) -- see train_student.py's module
-# docstring. CE and prob are fixed at weight 1; only LambdaProto/LambdaRel
-# are tunable here (each defaults to 1.0). Lr/L2/Optimizer default to
-# 0.0002/0.00001/adamw (teacher-tuned winner from tune_lr_l2_iemocap.py;
-# no separate student sweep has been run). Seed defaults to 50.
+# Needs a teacher checkpoint under output/model/teacher/ first.
 
 param(
     [double]$MaskRate = 0.1,

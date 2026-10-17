@@ -1,13 +1,4 @@
 #!/bin/bash
-# Runs train_teacher_iemocap.py for IEMOCAPSix -- 5-fold leave-one-session-
-# out CV, best checkpoint = best session-out F1 (early stopping tracks the
-# held-out session directly every epoch; see train_teacher_iemocap.py's
-# module docstring for why there's no separate validation session under
-# this protocol).
-#
-# Run from the code/ directory, any flag optional -- omitted ones fall back
-# to their default, passed ones override it:
-#   ./run_teacher_iemocap6.sh [--lr 0.0002] [--l2 0.00001] [--optimizer adamw] [--dropout 0.1] [--seed 50]
 
 set -e
 

@@ -1,22 +1,5 @@
 #!/bin/bash
-# Runs train_student_iemocap.py for IEMOCAPSix -- 5-fold leave-one-session-
-# out CV, best checkpoint = best session-out F1 (early stopping tracks the
-# held-out session directly every epoch; see train_student_iemocap.py's
-# module docstring for why there's no separate validation session under
-# this protocol). Requires a teacher checkpoint for IEMOCAPSix to already
-# exist under output/model/teacher/ -- run run_teacher_iemocap6.sh first
-# if it doesn't.
-#
-# Run from the code/ directory, any flag optional -- omitted ones fall back
-# to their default, passed ones override it:
-#   ./run_student_iemocap6.sh [--mask-rate 0.1] [--prompt-type none]
-#       [--lr 0.0002] [--l2 0.00001] [--optimizer adamw] [--dropout 0.1] [--seed 50]
-#       [--lambda-proto 1.0] [--lambda-rel 1.0]
-# Distillation loss is 4 clusters (CE, prob, proto, rel) -- see
-# train_student.py's module docstring. CE and prob are fixed at weight 1;
-# only --lambda-proto/--lambda-rel are tunable here. Lr/L2/optimizer default
-# to the teacher-tuned winner from tune_lr_l2_iemocap.py (no separate
-# student sweep has been run).
+# Needs a teacher checkpoint under output/model/teacher/ first.
 
 set -e
 
