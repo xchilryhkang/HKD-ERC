@@ -1,21 +1,3 @@
-"""
-Tunes n_graph_heads for the teacher on MELD, using the genuine train(1038)/
-valid(114)/test(280) split (see train_teacher_meld.py's module docstring).
-lr/l2/lstm_hidden_size/window/dropout are held FIXED at the values already
-tuned (lr=0.00005, l2=0.0001, hidden_size=128, window=3, dropout=0.2).
-Repeated across multiple seeds to report mean/std of val/test F1 per
-n_graph_heads value -- no 5-fold CV here (MELD has a single official
-split), so each candidate is just train-to-best-val-checkpoint, once per
-seed.
-
-Selection criterion is mean_val_f1 -- mean_test_f1 is reported for
-reference only, never used to pick the winner.
-
-Isolated and deletable: only imports from train_teacher.py / utils.py /
-loss.py, and nothing imports this file back. Results are written to their
-own .txt file under output/tune/, plus printed to the console.
-"""
-
 import os
 import sys
 import time

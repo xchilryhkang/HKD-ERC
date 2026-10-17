@@ -1,21 +1,3 @@
-"""
-Tunes lstm_hidden_size (-> hidden_dim = lstm_hidden_size * 2) for the
-teacher on MELD, using the genuine train(1038)/valid(114)/test(280) split
-(see train_teacher_meld.py's module docstring). lr/l2 are held FIXED at
-the values tune_lr_l2_meld.py found best (lr=0.00005, l2=0.0001).
-Repeated across multiple seeds to report mean/std of val/test F1 per
-hidden_size candidate -- no 5-fold CV here (MELD has a single official
-split), so each candidate is just train-to-best-val-checkpoint, once per
-seed.
-
-Selection criterion is mean_val_f1 -- mean_test_f1 is reported for
-reference only, never used to pick the winner.
-
-Isolated and deletable: only imports from train_teacher.py / utils.py /
-loss.py, and nothing imports this file back. Results are written to their
-own .txt file under output/tune/, plus printed to the console.
-"""
-
 import os
 import sys
 import time

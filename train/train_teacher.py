@@ -1,18 +1,3 @@
-"""
-Trains the teacher: model.HypergraphERCModel with full modality
-(mask_rate=0.0, prompt_type='none'), one model per fold, matching the
-leave-one-session-out cross-validation splits (e.g. IEMOCAP's 5 folds), so
-a fold's teacher only ever sees that fold's own train split.
-
-Loss is a single masked cross-entropy on log_prob (see loss.MaskedCELoss)
-— HypergraphERCModel doesn't produce any of the auxiliary quantities
-(confidence, flow, reconstruction) an older architecture might have needed
-extra loss terms for, so the training loop here stays this small on purpose.
-
-Checkpoints are saved via utils.save_teacher_checkpoint, keyed by
-dataset + fold_index, for a future student/KD script to load later.
-"""
-
 import os
 import sys
 import time

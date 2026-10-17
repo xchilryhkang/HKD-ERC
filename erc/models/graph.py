@@ -141,7 +141,6 @@ def batch_graphify(features, qmask, lengths, n_speakers, window_past, window_fut
     return node_features, edge_index, edge_type, edge_type_mapping, node_features_mask, features_speaker_ids, features_node_positions
 
 
-
 def batch_graphify_dynamic(outputs, qmask, seq_lengths, n_speakers, 
                            past_threshold, future_threshold, no_cuda=False, outputs_mask=None):
     """

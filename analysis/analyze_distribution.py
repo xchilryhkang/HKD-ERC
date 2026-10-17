@@ -1,40 +1,3 @@
-"""
-Isolated analysis: compare the teacher (full modality) and the student
-(missing modality, trained with relational prototype KD) on the TEST split
-of each fold. Read-only: loads checkpoints, never writes to them, and nothing
-imports this file, so it can be deleted without side effects.
-
-Outputs (per fold, under output/analysis/<timestamp>_<dataset>/fold<i>/):
-  - metrics.txt                 all scalar metrics
-  - tsne.png                    joint t-SNE of concatenated hypergraph features
-  - tsne_per_modality.png       joint t-SNE per modality (a/t/v), teacher vs
-                                 student, using each modality's own final
-                                 hypergraph node (h_final['a'/'t'/'v']) rather
-                                 than the concatenated r — lets you see whether
-                                 one modality's distribution degrades more
-                                 than the others under missing-modality masking,
-                                 colored by CLASS (same scheme as tsne.png)
-  - tsne_overlap_per_modality.png  same per-modality features, one panel per
-                                 modality, teacher/student overlaid in the
-                                 same embedding and colored by SOURCE (2
-                                 colors) instead of class — shows how much the
-                                 student's distribution has drifted/noised
-                                 away from the teacher's, per modality
-  - prototypes.png              teacher vs student prototype cosine structure
-  - confusion.png               row-normalized confusion matrices
-  - confidence.png              max-prob and JS-divergence distributions
-
-Also, if --folds has more than one fold, under output/analysis/<timestamp>_<dataset>/:
-  - confidence_all_folds.png    same as confidence.png, pooled over all
-                                 requested folds' test utterances instead
-                                 of just one fold
-  - summary_mean.txt            mean/std of every scalar metric over folds
-
-Prototypes here are TEST-set class means for both models (analysis only).
-The relational MSE is the held-out analogue of the training L_proto, using
-test prototypes on both sides instead of the batch/teacher-train split.
-"""
-
 import os
 import argparse
 import datetime
@@ -244,11 +207,10 @@ def plot_tsne(d, out_path, max_points=1500, seed=0):
 
 def plot_tsne_per_modality(d, out_path, max_points=1500, seed=0):
     """
-    Same idea as plot_tsne, but one row per modality (a/t/v), using each
-    modality's own final hypergraph node h_final['a'/'t'/'v'] instead of the
-    concatenated r. Each row is its own joint t-SNE fit (teacher+student of
-    THAT modality only) — rows are not comparable to each other spatially,
-    only teacher-vs-student within the same row is.
+    One row per modality, using that modality's own final hypergraph node
+    instead of the concatenated r. Each row is its own t-SNE fit, so rows
+    are not spatially comparable to each other -- only teacher vs student
+    within a row is.
     """
     rng = np.random.RandomState(seed)
     n = len(d['label'])
@@ -286,15 +248,10 @@ def plot_tsne_per_modality(d, out_path, max_points=1500, seed=0):
 
 def plot_tsne_overlap_per_modality(d, out_path, max_points=1500, seed=0):
     """
-    One figure, one panel per modality (a/t/v): teacher and student points
-    overlaid in the SAME embedding, colored by SOURCE (teacher vs student)
-    rather than by class. This is for inspecting how much the student's
-    per-modality feature distribution has drifted/noised relative to the
-    teacher's under missing-modality masking — heavy overlap means the
-    student's features for that modality stay close to the teacher's
-    (low noise); a clean split into two separate blobs means the student's
-    distribution for that modality has shifted away from the teacher's
-    (high noise/drift), independent of whether classes are separable.
+    One panel per modality, teacher and student overlaid in the same
+    embedding and colored by SOURCE rather than class: heavy overlap means
+    the student's features stayed close to the teacher's under masking,
+    two separate blobs mean they drifted apart.
     """
     rng = np.random.RandomState(seed)
     n = len(d['label'])
@@ -372,16 +329,9 @@ _DRIFT_COLOR_JS = '#555555'
 
 def plot_confidence(d, arr, out_path, suptitle=None, mask_rate=None, bins=30):
     """
-    mask_rate/suptitle are optional -- when given, matches the visual
-    convention of an earlier "drift_<dataset>_..._fold<i>" analysis
-    (full-modality model vs missing-modality model, i.e. teacher vs
-    student here): same colors/figsize/dpi/shared-bin-edges/axis labels as
-    that script's plot(), so output is directly comparable to its old
-    plots. Without mask_rate, falls back to the original teacher/student
-    framing with matplotlib's default styling.
-
-    argmax_changed is the fraction of valid utterances where the two
-    models' predicted class differs (1 - pred_agreement, as a percentage).
+    With mask_rate given, uses the styling of the older drift_* figures
+    (fixed colors, shared bin edges, dpi) so output is directly comparable
+    to them; without it, plain teacher/student styling.
     """
     pred_t, pred_s = arr['pred_t'], arr['pred_s']
     conf_full, conf_miss = arr['pt'].max(1), arr['ps'].max(1)

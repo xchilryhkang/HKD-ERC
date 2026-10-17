@@ -1,27 +1,3 @@
-"""
-Sweeps lambda_rel x lambda_prob for the student on IEMOCAPSix, 5-fold
-leave-one-session-out CV, best checkpoint = best session-out F1 (same
-early-stopping convention as train_student_iemocap.py). lambda_proto is
-left at its default (1.0, not swept). Distills from the already-tuned
-teacher checkpoints (output/model/teacher/, lr=0.0002/l2=1e-5/adamw) via
-utils.load_teacher_checkpoint -- run train_teacher_iemocap.py first if
-those don't exist yet.
-
-Grid values default to 0.2/0.4/0.6/0.8/1.0 for both lambdas (5x5 = 25
-combos). For plotting as a 3D bar chart (WAF/F1 vs lambda1 x lambda2,
-style matching an existing CMU-MOSI/IEMOCAP reference figure):
-lambda1 = lambda_rel, lambda2 = lambda_prob (user-confirmed axis mapping).
-
-Supports --max-combos (stop after N combos, e.g. to run a partial sweep
-now and continue later) and --skip-combos/--append-to (resume mid-sweep,
-same convention as tune_lr_l2_iemocap.py).
-
-Isolated and deletable: only imports from train_student.py / utils.py /
-loss.py / kd_losses.py, and nothing imports this file back. Results are
-written to their own .txt file under output/tune/, plus printed to the
-console.
-"""
-
 import os
 import sys
 import time

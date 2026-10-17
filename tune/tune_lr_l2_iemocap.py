@@ -1,28 +1,3 @@
-"""
-Re-tunes lr x l2 for the teacher on IEMOCAPSix, 5-fold leave-one-session-
-out CV, best checkpoint = best session-out F1 (early stopping tracks the
-held-out session directly every epoch -- see train_teacher_iemocap.py's
-module docstring for why there's no separate validation session under
-this protocol). Repeated across multiple seeds to report mean/std of the
-5-fold CV session-out F1 per (lr, l2) combo.
-
-Supports --optimizer {adam,adamw} (see utils.make_optimizer) -- this file
-previously only tuned under plain Adam; re-run it whenever the optimizer
-changes, since the optimal lr/l2 aren't assumed to transfer across
-optimizers (AdamW's decoupled weight decay changes what a given l2 value
-actually does).
-
-Isolated and deletable: only imports from train_teacher.py / utils.py /
-loss.py, and nothing imports this file back. Results are written to their
-own .txt file under output/tune/, plus printed to the console.
-
-The DATA SPLIT (get_loaders) is identical across every combo/seed in this
-sweep (it's deterministic -- 4 sessions train / 1 held out per fold, no
-randomness in which utterances land where), so varying --seeds here varies
-ONLY training randomness (weight init, dropout, batch order), not which
-data each fold sees.
-"""
-
 import os
 import sys
 import time

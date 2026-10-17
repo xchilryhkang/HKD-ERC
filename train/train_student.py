@@ -1,68 +1,3 @@
-"""
-Trains the student: model.HypergraphERCModel with incomplete modality
-(mask_rate > 0, prompt_type enabled — default 'prototype', see prompt.py),
-distilling from a frozen full-modality teacher loaded per fold via
-utils.load_teacher_checkpoint (produced by train/train_teacher_*.py).
-
-Total student loss (per batch, valid utterances only) is 4 CLUSTERS, not 6
-independent terms -- CE is fixed at weight 1; "prob", "proto" and "rel"
-each carry a tunable lambda (lambda_prob defaults to 1.0, i.e. no change
-from the original fixed-weight-1 behavior, unless explicitly swept --
-prob's two terms are already roughly CE-scale, see the magnitude note
-below, so 1.0 is a reasonable default even though it's now tunable).
-"proto"/"rel" are the two clusters whose natural magnitude is much
-smaller than CE/prob (cosine-similarity-based MSE, typically 10-100x
-smaller than CE/KL in practice) and so may need a lambda WELL ABOVE 1 to
-have comparable influence on the gradient:
-
-    loss = CE(student log_prob, label)                                           [CE, weight fixed=1]
-         + lambda_prob  * ( KL(student log_prob || teacher log_prob) + L_ot )     [prob, tunable]
-         + lambda_proto * L_proto                                                 [proto, tunable]
-         + lambda_rel   * ( L_e_proto + L_node_rel )                              [rel, tunable]
-
-"prob" groups KD and OT together because both operate on the SAME pair of
-distributions (teacher's vs student's class probabilities) at the
-response level -- KD matches them class-by-class, OT additionally accounts
-for semantic distance between classes; it only makes sense to weight them
-as one response-level signal, not two independently-tunable ones. "rel"
-groups L_e_proto and L_node_rel together because both are about the 'e'
-(VUE/consensus) node's own relational behavior -- one to its class
-prototype, one to the other three nodes -- as opposed to "proto", which is
-about the WHOLE representation r's relation to class prototypes.
-
-L_proto / L_e_proto (kd_losses.PrototypeRelationLoss, same class, two calls)
-match the relative structure of similarities to class prototypes rather
-than absolute feature positions:
-  - r = concat [h_a || h_t || h_v || h_e] (hypergraph output, what the
-    classifier consumes), D = 4 * hidden_dim; L_e_proto reruns the same
-    loss on h_e alone (D = hidden_dim) so the VUE/consensus node gets its
-    own sharp prototype gradient instead of only an indirect one via r
-  - teacher prototypes p_t[c] = mean teacher r (or h_e) over the WHOLE train
-    split with label c, computed once per fold right after the teacher is
-    loaded, then fixed
-  - student prototypes p_s[c] = mean student r (or h_e) over the batch with
-    label c, recomputed every batch (gradient flows through them)
-  - only classes present in the batch (same set for both models) enter the loss
-
-L_node_rel (kd_losses.NodeRelationLoss) is structural, not class-based:
-per utterance, it matches how 'e' relates to each of a/t/v (cosine, taken
-within each model's own feature space) between teacher and student — see
-that class's docstring for why "within each model's own space" matters.
-
-The teacher is frozen (requires_grad_(False), eval(), no_grad) and never
-updated — only the student trains.
-
-IMPORTANT — architecture must match the teacher checkpoint exactly:
---lstm_hidden_size, --graph-layers, --hg-layers, --n-graph-heads,
---reliability-type, --vue-reliability-type, --disable-vue-reliability-gate,
---disable-bilstm all affect parameter SHAPES and must be identical to
-whatever train/train_teacher_*.py used to produce the checkpoint
-being loaded, or load_state_dict will fail with a key-shape mismatch. The
-defaults here match run_teacher's tuned values. --windowp/--windowf
-don't affect shapes, so those (like --lr/--l2/--dropout/--prompt-type/
---mask-type) are free to differ from the teacher's own training run.
-"""
-
 import os
 import sys
 import time
@@ -201,11 +136,6 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         adim, tdim, vdim = audio_host.size(2), text_host.size(2), visual_host.size(2)
         seqlen, batch = audio_host.size(0), audio_host.size(1)
 
-        # ============================ #
-        # Student mask: same random_mask/generate_inputs pipeline as
-        # train_teacher.py (standard branch only — lower_bound mode not
-        # ported here, matching the rest of this codebase).
-        # ============================ #
         matrix = random_mask(3, seqlen * batch, mask_rate)
         audio_host_mask = torch.LongTensor(np.reshape(matrix[:, 0], (seqlen, batch, 1)))
         text_host_mask = torch.LongTensor(np.reshape(matrix[:, 1], (seqlen, batch, 1)))
@@ -246,9 +176,8 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
             audio_host_mask, text_host_mask, visual_host_mask,
             audio_guest_mask, text_guest_mask, visual_guest_mask, qmask)
 
-        # Teacher sees the true, complete data: no masking at all. Its mask
-        # tensor is all-ones so nothing downstream thinks anything is missing
-        # — matches train_teacher.py's mask_rate=0.0 behavior exactly.
+        # Teacher sees complete data: all-ones mask, so nothing downstream
+        # treats any modality as missing.
         teacher_input_features = generate_inputs(
             audio_host, text_host, visual_host,
             audio_guest, text_guest, visual_guest, qmask)
@@ -271,8 +200,8 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         loss_ce = cls_loss(lp_, labels_, umask)
         loss_kd = kl_loss(log_prob_student, log_prob_teacher, umask)
 
-        # Flatten all 4 hypergraph nodes to valid utterances once; everything
-        # below (r, e-alone, node-relation) is built from these.
+        # Flatten the 4 hypergraph nodes to valid utterances once; every
+        # feature-level loss below is built from these.
         valid = umask.reshape(-1).bool()
         hf_s_v = {k: flatten_valid(v, valid) for k, v in h_final_s.items()}  # has grad
         hf_t_v = {k: flatten_valid(v, valid) for k, v in h_final_t.items()}  # no grad
@@ -282,25 +211,21 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         r_t_v = torch.cat([hf_t_v['a'], hf_t_v['t'], hf_t_v['v'], hf_t_v['e']], dim=-1)
         loss_proto = proto_loss(r_s_v, r_t_v, lab_v, proto_t)
 
-        # Same relational-prototype loss, applied to the 'e' (VUE/consensus)
-        # node alone, against its own teacher prototype.
         loss_e_proto = proto_loss(hf_s_v['e'], hf_t_v['e'], lab_v, proto_t_e)
 
         # Structural KD: how 'e' relates to a/t/v, within each model's own space.
         loss_node_rel = node_rel_loss(hf_s_v, hf_t_v)
 
-        # Optimal-transport loss between the two class-probability
-        # distributions, ground cost = semantic distance between teacher
-        # prototypes. exp(log_prob) recovers softmax exactly (no temperature
-        # here, unlike kl_loss), so this needs no raw logits from the model.
+        # exp(log_prob) recovers the softmax exactly (no temperature here,
+        # unlike kl_loss), so OT needs no raw logits from the model.
         lp_t_ = log_prob_teacher.transpose(0, 1).contiguous().view(-1, log_prob_teacher.size(2))
         P = lp_t_[valid].exp()
         Q = lp_[valid].exp()
         loss_ot = ot_loss(P, Q, ot_cost)
 
-        # 4 clusters: CE (weight fixed=1), prob = KD+OT, proto, rel =
-        # e_proto+node_rel -- prob/proto/rel all tunable, see module
-        # docstring. lambda_prob defaults to 1.0 (original fixed behavior).
+        # 4 clusters: CE (always weight 1), prob = KD+OT, proto, rel =
+        # e_proto+node_rel. proto/rel are cosine-based and run 10-100x
+        # smaller than CE/prob, so their lambdas may need to exceed 1.
         loss = (loss_ce + args.lambda_prob * (loss_kd + loss_ot)
                 + args.lambda_proto * loss_proto
                 + args.lambda_rel * (loss_e_proto + loss_node_rel))
@@ -369,10 +294,7 @@ if __name__ == '__main__':
     parser.add_argument('--mask-type', type=str, default='constant-0.1',
                         help='Missing-rate for the student, as constant-<rate>.')
 
-    # ---- distillation: 4 clusters (CE, prob, proto, rel) -- see module ---- #
-    # ---- docstring. CE is fixed at weight 1; prob/proto/rel are all    ---- #
-    # ---- tunable (proto/rel's natural magnitude is much smaller than   ---- #
-    # ---- CE/prob, so don't be shy about trying values well above 1).   ---- #
+    # distillation: CE is always weight 1; prob/proto/rel are tunable
     parser.add_argument('--kd-temperature', type=float, default=2.0)
     parser.add_argument('--ot-epsilon', type=float, default=0.1, help='Sinkhorn entropic regularization.')
     parser.add_argument('--ot-iters', type=int, default=50, help='Sinkhorn iterations.')
@@ -447,11 +369,9 @@ if __name__ == '__main__':
         print(f'>>>>> Student fold {ii+1}/{args.num_folder} >>>>>')
         start_time = time.time()
 
-        # Teacher: architecture matches the student's shape-affecting args,
-        # but prompt_type='none' (how train_teacher.py built it) — must
-        # differ from the student's own args.prompt_type, or load_state_dict
-        # below hits a key mismatch (prompt_a/t/v or modality_prompt exist
-        # in one but not the other).
+        # The teacher was built with prompt_type='none', so it must be
+        # rebuilt that way here too regardless of the student's setting --
+        # otherwise load_state_dict hits a prompt-key mismatch.
         teacher_args = copy.deepcopy(args)
         teacher_args.prompt_type = 'none'
         teacher = build_model(teacher_args, adim, tdim, vdim)
@@ -463,9 +383,8 @@ if __name__ == '__main__':
             p.requires_grad_(False)
         teacher.eval()
 
-        # Teacher prototypes: one pass over the whole train split, fixed for this fold.
-        # The OT ground cost is derived from proto_t — computed once here too,
-        # reused by every batch for the rest of the fold.
+        # Prototypes and the OT cost derived from them are fixed per fold:
+        # computed once here, reused by every batch.
         proto_t, proto_t_e = compute_teacher_prototypes(args, teacher, train_loaders[ii], adim, tdim, vdim)
         ot_cost = compute_ot_cost_matrix(proto_t)
         print(f'  teacher prototypes computed: shape={tuple(proto_t.shape)}, '

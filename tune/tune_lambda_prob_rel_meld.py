@@ -1,28 +1,3 @@
-"""
-Sweeps lambda_rel x lambda_prob for the student on MELD, using the genuine
-train/valid/test split (same protocol as train_student_meld.py): early
-stopping tracks the real valid F1, and test F1 at the best-val checkpoint
-is reported alongside it. lambda_proto is left at its default (1.0, not
-swept). Distills from the existing MELD teacher checkpoint
-(output/model/teacher/meld_fold0_teacher.pt) via utils.load_teacher_checkpoint
--- run train_teacher_meld.py first if it doesn't exist yet.
-
-Grid values default to 0.2/0.4/0.6/0.8/1.0 for both lambdas (5x5 = 25
-combos), same convention as tune_lambda_prob_rel_iemocap.py: lambda1 =
-lambda_rel, lambda2 = lambda_prob (for the matching 3D-bar plot via
-plot_lambda_sweep_3d.py).
-
-No 5-fold loop here (MELD has one real split), so this is much cheaper
-per combo than the IEMOCAP version -- --max-combos/--skip-combos/
---append-to are still supported for consistency/resumability, but a full
-25-combo run should be practical in one go.
-
-Isolated and deletable: only imports from train_student.py / utils.py /
-loss.py / kd_losses.py, and nothing imports this file back. Results are
-written to their own .txt file under output/tune/, plus printed to the
-console.
-"""
-
 import os
 import time
 import argparse

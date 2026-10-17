@@ -1,34 +1,3 @@
-"""
-Trains the teacher for IEMOCAP (Four/Six) using the standard 5-fold
-leave-one-session-out CV protocol: for each fold, train on the 4 other
-sessions, track performance on the held-out session EVERY epoch, and keep
-the checkpoint from whichever epoch scored best on it (early stopping on
-that signal). The 5-fold mean of each fold's best session-out F1/acc is
-the final reported metric.
-
-Why this is a separate file from train_teacher.py: train_teacher.py's
-generic loop is written around train_loaders/val_loaders/test_loaders as
-three conceptually separate things, which fits MELD (which really does
-have three separate splits) but is misleading for IEMOCAP -- under this
-CV protocol there IS NO separate validation session; what the loop
-tracks every epoch simply IS the held-out session's own performance
-(utils.get_loaders already returns val_loaders == test_loaders for
-IEMOCAP precisely because there's nothing else to hand it). Naming a
-local variable "val_fscore" there obscures that it's actually the
-session-out score. This file names it for what it is instead:
-sessionout_fscore, tracked directly off test_loaders, no val_loaders
-involved anywhere.
-
-MELD has a real, separate validation split and keeps using
-train_teacher.py as-is.
-
-Isolated and deletable: reuses train_or_eval_model/build_model/etc. from
-train_teacher.py and utils.py, but nothing imports this file back, so it
-can be deleted without side effects. Saves checkpoints via the SAME
-save_teacher_checkpoint(dataset, fold_index) path train_teacher.py uses --
-running this will overwrite that dataset's existing teacher checkpoints.
-"""
-
 import os
 import sys
 import time
@@ -118,10 +87,10 @@ if __name__ == '__main__':
         audio_root=audio_root, text_root=text_root, video_root=video_root,
         num_folder=args.num_folder, batch_size=args.batch_size, dataset=args.dataset, num_workers=0
     )
-    # _unused_val_loaders IS test_loaders (see utils.get_loaders) -- never
-    # touched below. There is no separate validation session under this CV
-    # protocol; what we track every epoch below (sessionout_fscore) IS the
-    # held-out session's own score, tracked honestly as such.
+    # Leave-one-session-out CV has no separate validation session, so early
+    # stopping below tracks the HELD-OUT session itself (named sessionout_*,
+    # not val_*, to keep that honest). This is the standard ERC protocol, not
+    # an accident -- get_loaders' val_loaders is just test_loaders again here.
 
     print(f'\n========== Training Teacher, IEMOCAP 5-fold leave-one-session-out CV '
           f'(best checkpoint = best session-out F1, per fold) ==========\n')

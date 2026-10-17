@@ -1,32 +1,3 @@
-"""
-HypergraphERCModel: the VUE + Hypergraph pipeline, wired end to end.
-
-    raw feature -> proj -> prompt -> BiLSTM -> ContextGraphStack (per modality)
-                                                        |
-                                                        v
-                                    VUEFusion (a,t,v -> v_hat, per utterance)
-                                                        |
-                                                        v
-                    HypergraphStack ({a,t,v,e} nodes, cross-modal only, L layers)
-                                                        |
-                                                        v
-                          concat [h_a || h_t || h_v || h_e] -> Linear -> log_prob
-
-One hidden_dim (= lstm_hidden_size * 2) runs the whole pipeline: proj,
-BiLSTM, ContextGraphStack's input AND output, VUE's concat_dim, and
-Hypergraph's own dim are all exactly hidden_dim — no separate
-graph_hidden_size bottleneck. classifier input is 4 * hidden_dim (concat
-of the 4 final hypergraph nodes).
-
-forward() returns (log_prob, v_hat, gamma_vue, h_final, gammas_hg): the
-classification output plus the VUE/hypergraph intermediates, exposed for
-inspection or a future distillation loss (see vue.py / hypergraph.py's
-docstrings for what gamma_vue / gammas_hg mean). Training this model — see
-train_teacher.py — is a plain masked cross-entropy on log_prob; there's no
-confidence/flow/reconstruction loss here, since this architecture has none
-of those components.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,10 +24,6 @@ class HypergraphERCModel(nn.Module):
         self.window_past = window_past
         self.window_future = window_future
 
-        # ============================ #
-        #     Shared Projection (raw modality dim -> common hidden_dim)
-        # ============================ #
-
         hidden_dim = lstm_hidden_size * 2
         assert hidden_dim % 2 == 0, 'lstm_hidden_size * 2 must be even (BiLSTM splits it across directions)'
         self.hidden_dim = hidden_dim
@@ -64,10 +31,6 @@ class HypergraphERCModel(nn.Module):
         self.proj_a = nn.Linear(adim, hidden_dim)
         self.proj_t = nn.Linear(tdim, hidden_dim)
         self.proj_v = nn.Linear(vdim, hidden_dim)
-
-        # ============================ #
-        #     Missing-Modality Prompt
-        # ============================ #
 
         self.prompt_type = prompt_type
         if prompt_type == 'constant':
@@ -84,27 +47,15 @@ class HypergraphERCModel(nn.Module):
         elif prompt_type != 'none':
             raise ValueError(f"Unknown prompt_type: {prompt_type}. Expected 'none', 'constant' or 'prototype'.")
 
-        # ============================ #
-        #     Unimodal BiLSTM (optional)
-        # ============================ #
-
         self.use_bilstm = use_bilstm
         if use_bilstm:
             self.lstm_a = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim // 2, num_layers=1, bidirectional=True, dropout=dropout)
             self.lstm_t = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim // 2, num_layers=1, bidirectional=True, dropout=dropout)
             self.lstm_v = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim // 2, num_layers=1, bidirectional=True, dropout=dropout)
 
-        # ============================ #
-        #     Unimodal Context-Graph (per modality; see context_graph.py)
-        # ============================ #
-
         self.context_graph_a = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
         self.context_graph_t = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
         self.context_graph_v = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
-
-        # ============================ #
-        #     VUE (consensus fusion over a/t/v, per utterance) — see vue.py
-        # ============================ #
 
         # hypergraph.py has no input projection: every node must already
         # share one dimension. d_e defaults to hidden_dim so that's
@@ -122,22 +73,12 @@ class HypergraphERCModel(nn.Module):
             reliability_type=vue_reliability_type, use_reliability_gate=use_vue_reliability_gate
         )
 
-        # ============================ #
-        #     Hypergraph (cross-modal only, per utterance) — see hypergraph.py
-        # ============================ #
-
         self.hypergraph = HypergraphStack(self.d_e, n_layers=hg_layers)
 
-        # ============================ #
-        #     Classifier: concat the 4 final hypergraph nodes [a || t || v || e]
-        # ============================ #
 
         self.classifier = nn.Linear(4 * self.d_e, n_classes)
 
     def forward(self, inputfeats, qmask, umask, seq_lengths, input_features_mask, adim, tdim, vdim, label=None):
-        # ============================ #
-        #     Unimodal Feature Extraction + Shared Projection
-        # ============================ #
 
         audio_feats = inputfeats[0][:, :, :adim]
         text_feats = inputfeats[0][:, :, adim:adim + tdim]
@@ -146,10 +87,6 @@ class HypergraphERCModel(nn.Module):
         audio_h = self.proj_a(audio_feats)  # [T, B, hidden_dim]
         text_h = self.proj_t(text_feats)
         video_h = self.proj_v(video_feats)
-
-        # ============================ #
-        #     Missing-Modality Prompt
-        # ============================ #
 
         outputs_mask_raw = input_features_mask[0]  # [T, B, 3], cols = audio/text/visual
 
@@ -161,20 +98,12 @@ class HypergraphERCModel(nn.Module):
             prompted = self.modality_prompt({'a': audio_h, 't': text_h, 'v': video_h}, outputs_mask_raw)
             audio_h, text_h, video_h = prompted['a'], prompted['t'], prompted['v']
 
-        # ============================ #
-        #     Unimodal, Optional BiLSTM Temporal Refinement
-        # ============================ #
-
         if self.use_bilstm:
             audio_out, _ = self.lstm_a(audio_h)
             text_out, _ = self.lstm_t(text_h)
             video_out, _ = self.lstm_v(video_h)
         else:
             audio_out, text_out, video_out = audio_h, text_h, video_h
-
-        # ============================ #
-        #     Build a graph for each modality
-        # ============================ #
 
         outputs_mask = outputs_mask_raw.unsqueeze(2)
         outputs_a = audio_out.unsqueeze(2)
@@ -198,10 +127,6 @@ class HypergraphERCModel(nn.Module):
         avail_t = umask_flat[:, 1]
         avail_v = umask_flat[:, 2]
 
-        # ============================ #
-        #     Context-Graph Learning (per modality)
-        # ============================ #
-
         hidden0_a = self.context_graph_a(
             features_a, edge_index, features_speaker_ids, features_node_positions,
             avail_a, seq_lengths, umask
@@ -216,10 +141,6 @@ class HypergraphERCModel(nn.Module):
         )
         # each hidden0_* : [T, B, hidden_dim] = tilde_h_i^m
 
-        # ============================ #
-        #     VUE: consensus fusion over a/t/v, per utterance
-        # ============================ #
-
         availability = {
             'a': outputs_mask_raw[:, :, 0],
             't': outputs_mask_raw[:, :, 1],
@@ -227,16 +148,8 @@ class HypergraphERCModel(nn.Module):
         }
         v_hat, gamma_vue = self.vue({'a': hidden0_a, 't': hidden0_t, 'v': hidden0_v}, availability)
 
-        # ============================ #
-        #     Hypergraph: cross-modal-only refinement, per utterance
-        # ============================ #
-
         h_init = {'a': hidden0_a, 't': hidden0_t, 'v': hidden0_v, 'e': v_hat}
         h_final, gammas_hg = self.hypergraph(h_init)
-
-        # ============================ #
-        #     Classifier: concat [a || t || v || e] -> log_prob
-        # ============================ #
 
         concat_features = torch.cat(
             [h_final['a'], h_final['t'], h_final['v'], h_final['e']], dim=-1

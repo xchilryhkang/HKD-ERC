@@ -1,34 +1,3 @@
-"""
-Trains the student for IEMOCAP (Four/Six) using the standard 5-fold
-leave-one-session-out CV protocol: for each fold, train on the 4 other
-sessions (with missing-modality masking + distillation from that fold's
-teacher), track performance on the held-out session EVERY epoch, and keep
-the checkpoint from whichever epoch scored best on it (early stopping on
-that signal). The 5-fold mean of each fold's best session-out F1/acc is
-the final reported metric.
-
-Same reasoning as train_teacher_iemocap.py: there is no separate
-validation session under this CV protocol -- what gets tracked every
-epoch below (sessionout_fscore) IS the held-out session's own score,
-named honestly as such rather than as a misleading "val_fscore" (see that
-file's docstring for the fuller rationale).
-
-All five distillation losses (KD / proto / OT / e_proto / node_rel) and
-their lambda_* weights, kd_temperature, ot_epsilon/ot_iters, prompt_type
-etc. all work exactly as in train_student.py -- only the per-fold loop and
-its naming differ.
-
-MELD has a real, separate validation split and keeps using
-train_student.py as-is.
-
-Isolated and deletable: reuses concat_repr/compute_teacher_prototypes/
-train_or_eval_student/etc. from train_student.py and utils.py, but nothing
-imports this file back, so it can be deleted without side effects. Saves
-checkpoints via the SAME save_student_checkpoint(dataset, fold_index) path
-train_student.py uses -- running this will overwrite that dataset's
-existing student checkpoints.
-"""
-
 import os
 import sys
 import time
@@ -145,9 +114,8 @@ if __name__ == '__main__':
         audio_root=audio_root, text_root=text_root, video_root=video_root,
         num_folder=args.num_folder, batch_size=args.batch_size, dataset=args.dataset, num_workers=0
     )
-    # _unused_val_loaders IS test_loaders (see utils.get_loaders) -- never
-    # touched below. See train_teacher_iemocap.py's docstring for why this
-    # protocol has no separate validation session.
+    # Early stopping tracks the held-out session itself -- see
+    # train_teacher_iemocap.py for why this protocol has no separate val.
 
     print(f'\n========== Training Student, IEMOCAP 5-fold leave-one-session-out CV '
           f'(best checkpoint = best session-out F1, mask_rate={mask_rate}, prompt_type={args.prompt_type}, '

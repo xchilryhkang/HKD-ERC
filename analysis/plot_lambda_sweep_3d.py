@@ -1,18 +1,3 @@
-"""
-Plots the lambda_rel (lambda1) x lambda_prob (lambda2) sweep from
-tune_lambda_prob_rel_iemocap.py as a 3D bar chart (WAF vs lambda1 x
-lambda2), matching the visual convention of a reference figure (grouped
-bars colored by lambda2, blue-to-green gradient, z-axis = WAF%).
-
-Usage:
-    python plot_lambda_sweep_3d.py --log output/tune/<sweep file>.txt \
-        [--title "IEMOCAP (six-class)"] [--out output/tune/lambda_sweep_3d.svg]
-
-Parses every ">>>>> lambda_rel=X lambda_prob=Y: sessionout_f1 mean=Z ..."
-line in the log; if a (lambda1, lambda2) pair appears more than once (e.g.
-a combo re-run after a resume), the LAST occurrence wins.
-"""
-
 import re
 import argparse
 import numpy as np

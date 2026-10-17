@@ -1,61 +1,22 @@
-"""
-VUE (Virtual Utterance Embedding): attention-fusion over the 3 modalities,
-per utterance. See vue_module (spec image) for the derivation. Consumes the
-context-graph output per modality — h_i^m = [h_i || h_i'] from
-context_graph.ContextGraphStack, i.e. model.py's hidden0_a/t/v, shape
-[T, B, concat_dim] — and produces ONE new per-utterance embedding v_hat_i,
-independent from a/t/v (it doesn't replace or feed back into any of them).
-It is the initialization for the hypergraph stage (see hypergraph.py) that
-consumes it; both are wired together in model.HypergraphERCModel.forward.
-
-Deviation from the spec image, per explicit instruction: step 1 drops the
-LeakyReLU (z_i^m is a plain affine projection, no activation).
-"""
-
 import torch
 import torch.nn as nn
 
 
 class VUEFusion(nn.Module):
     """
-        Step 1 (consensus projection, shared across modalities, no activation):
-            z_i^m = W_c h_i^m + b_c                              in R^{D_e}
+    Fuses a/t/v into one consensus node per utterance, by attention over a
+    shared projection, gated by the same log-reliability trick as
+    ContextGraphLayer:
 
-        Step 2 (attention score, optionally gated by the same log-prior
-        trick as ContextGraphLayer's reliability — see context_graph.py):
-            s_i^m = q_c^T tanh(W_s z_i^m) + log w_R(i, m)     if use_reliability_gate
-                  = q_c^T tanh(W_s z_i^m)                      if not use_reliability_gate
-            w_R(i, m) = 1              if a_i^m == 1 (modality m present at utterance i)
-                      = reliability(z_i^m)  if a_i^m == 0 (placeholder)
+        z^m     = W_c h^m
+        s^m     = q_c^T tanh(W_s z^m) [+ log w_R(m), if use_reliability_gate]
+        gamma   = softmax_m(s^m)
+        v_hat   = sum_m gamma^m z^m
 
-        use_reliability_gate (default True) turns the log w_R term on/off
-        entirely — when off, no reliability parameter is even created (see
-        __init__), and attention is driven by content alone, same as never
-        gating the graph's own attention. This flag exists only here for
-        now; ContextGraphLayer doesn't have an equivalent yet.
-
-        Same reliability_type choice as ContextGraphLayer (only relevant
-        when use_reliability_gate=True):
-          - 'scalar'  reliability = sigmoid(theta_rho_e), one global learned
-                      value shared by every placeholder, regardless of z_i^m.
-          - 'feature' reliability = sigmoid(MLP(z_i^m)) — content-dependent,
-                      looks at that utterance-modality's own consensus-space
-                      projection. Default.
-
-        Step 3 (normalize across the 3 modalities, per utterance):
-            gamma_i^m = softmax_{m' in {a,t,v}}(s_i^{m'})
-
-        Step 4 (VUE embedding):
-            v_hat_i = sum_m gamma_i^m * z_i^m                     in R^{D_e}
-
-        q_c, W_s, theta_rho_e are shared across modalities (no modality index
-        in the spec) — one consensus query/gate, not one per modality.
-        Present utterances are hard-fixed at w_R = 1 for that modality, same
-        as ContextGraphLayer: when nothing is missing (availability all 1s,
-        e.g. the teacher), theta_rho_e receives zero gradient and this module
-        reduces to a plain reliability-free attention fusion, matching the
-        "teacher self-cancels the reliability factor" property used
-        throughout this codebase (see context_graph.py section 7 note).
+    w_R is 1 where the modality is present and a learned reliability where
+    it is a placeholder, so with nothing missing (the teacher) the gate
+    contributes 0 and this is plain attention fusion. q_c/W_s and the
+    reliability parameters are shared across modalities.
     """
 
     def __init__(self, concat_dim, d_e, modal_keys=('a', 't', 'v'), reliability_type='feature',
@@ -85,21 +46,9 @@ class VUEFusion(nn.Module):
 
     def forward(self, h_dict, availability_dict):
         """
-        h_dict:            {'a'/'t'/'v': [T, B, concat_dim]} — context-graph
-                            output per modality (model.py's hidden0_a/t/v).
-        availability_dict: {'a'/'t'/'v': [T, B]} — a_i^m in {0, 1}: 1 if that
-                            modality is present at utterance i, 0 if it's a
-                            placeholder. This is input_features_mask[0]'s
-                            per-modality column ([:, :, 0/1/2] for a/t/v),
-                            NOT umask_flat (that's the flat graph-node
-                            version of the same thing; VUE runs after the
-                            context-graph has already reshaped back to
-                            [T, B, ...], so it uses the [T, B] mask directly).
-
-        returns:
-            v_hat: [T, B, d_e]    — the new virtual-utterance node.
-            gamma: [T, B, M]      — attention weight per modality (M = len(modal_keys)),
-                                    exposed for inspection/debugging.
+        h_dict            {'a','t','v': [T, B, concat_dim]}
+        availability_dict {'a','t','v': [T, B]}, 1 = present, 0 = placeholder
+        returns           v_hat [T, B, d_e], gamma [T, B, M] (per-modality weight)
         """
         z = {m: self.w_c(h_dict[m]) for m in self.modal_keys}  # step 1, each [T, B, d_e]
 

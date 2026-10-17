@@ -12,7 +12,6 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
-import torch.nn.functional as F
 
 from sklearn.preprocessing import OneHotEncoder
 
@@ -62,13 +61,9 @@ def save_model_state(args, model_state, save_root, folder_index, folder_f1, fold
 
 def save_teacher_checkpoint(model_state, dataset, fold_index):
     """
-    Save a full-modality teacher's best-val state_dict with a deterministic
-    filename (no timestamp), so a KD student script can look it up by
-    dataset + fold_index instead of having to know the training run's date.
-    Each fold's teacher must be trained on that fold's train split only,
-    matching the leave-one-session-out cross-validation splits (e.g. IEMOCAP's
-    5 folds), so a student in fold i never distills from a teacher that saw
-    fold i's val/test session during its own training.
+    Deterministic filename (no timestamp) so the student can find it by
+    dataset + fold. Each fold's teacher must only have seen that fold's
+    training sessions, or the student inherits a leak.
     """
     os.makedirs(path.TEACHER_DIR, exist_ok=True)
     ckpt_path = os.path.join(path.TEACHER_DIR, f'{dataset.lower()}_fold{fold_index}_teacher.pt')
@@ -212,95 +207,10 @@ def get_loaders(dataset, batch_size, num_workers, meld_path=None, audio_root=Non
         return train_loaders, test_loaders, test_loaders, adim, tdim, vdim
 
 
-def get_loaders_iemocap_innerval(dataset_name, audio_root, text_root, video_root, batch_size,
-                                  num_folder=5, num_workers=0, val_frac=0.1, seed=50):
-    """
-    Same per-fold leave-one-session-out split as get_loaders' IEMOCAP
-    branch, but carves a REAL validation split out of each fold's 4
-    TRAINING sessions, instead of reusing the held-out test session as val
-    (get_loaders' val_loaders == test_loaders for IEMOCAP -- see that
-    function). val_idxs are drawn from the training sessions only, so they
-    never overlap with the test session.
-
-    Split at the CONVERSATION level (each index is one whole dialogue, same
-    unit get_loaders already splits on) -- never mid-dialogue, so there's
-    no temporal-context leakage either.
-
-    val_frac: fraction of each fold's training conversations held out for
-    val (default 0.1 = 10%, recommended starting point -- IEMOCAP has ~150
-    conversations total, so a fold's ~120-conversation train pool yields
-    roughly a dozen val conversations, enough for a usable early-stop
-    signal without cutting too deeply into an already-small training set).
-
-    Returns train_loaders, val_loaders, test_loaders, adim, tdim, vdim --
-    same shape as get_loaders, but val_loaders[ii] is now genuinely
-    different data from test_loaders[ii].
-    """
-    dataset = IEMOCAPDataset(
-        label_path=path.PATH_TO_LABEL_Win[dataset_name],
-        audio_root=audio_root,
-        text_root=text_root,
-        video_root=video_root
-    )
-
-    session_to_idx = {}
-    for idx, vid in enumerate(dataset.vids):
-        session = int(vid[4]) - 1
-        if session not in session_to_idx:
-            session_to_idx[session] = []
-        session_to_idx[session].append(idx)
-
-    assert len(session_to_idx) == num_folder, f'Must split into {num_folder} folders'
-
-    rng = np.random.RandomState(seed)
-
-    train_loaders, val_loaders, test_loaders = [], [], []
-    for ii in range(num_folder):
-        test_idxs = session_to_idx[ii]
-
-        train_full_idxs = []
-        for jj in range(num_folder):
-            if jj != ii:
-                train_full_idxs.extend(session_to_idx[jj])
-        train_full_idxs = list(train_full_idxs)
-        rng.shuffle(train_full_idxs)
-
-        n_val = max(1, int(round(len(train_full_idxs) * val_frac)))
-        val_idxs = train_full_idxs[:n_val]
-        train_idxs = train_full_idxs[n_val:]
-
-        train_loader = DataLoader(
-            dataset, batch_size=batch_size, sampler=SubsetRandomSampler(train_idxs),
-            collate_fn=dataset.collate_fn, num_workers=num_workers, pin_memory=False
-        )
-        val_loader = DataLoader(
-            dataset, batch_size=batch_size, sampler=SubsetRandomSampler(val_idxs),
-            collate_fn=dataset.collate_fn, num_workers=num_workers, pin_memory=False
-        )
-        test_loader = DataLoader(
-            dataset, batch_size=batch_size, sampler=SubsetRandomSampler(test_idxs),
-            collate_fn=dataset.collate_fn, num_workers=num_workers, pin_memory=False
-        )
-
-        train_loaders.append(train_loader)
-        val_loaders.append(val_loader)
-        test_loaders.append(test_loader)
-
-    adim, tdim, vdim = dataset.get_featDim()
-
-    return train_loaders, val_loaders, test_loaders, adim, tdim, vdim
-
-
 def get_loaders_meld(features_path, batch_size, num_workers=0, roberta_idx=1):
     """
-    MELD loader using dataloader_meld.MELDRobertaDataset -- MELD's GENUINE
-    train(1038)/valid(114)/test(280) split, read from one self-contained
-    feature file (path.PATH_MELD). Takes roberta_idx, which get_loaders'
-    MELD branch does not (that one always uses text variant 1).
-
-    Returns single-element lists (train_loaders, val_loaders, test_loaders)
-    to match get_loaders' shape, so calling code can index [0] uniformly
-    regardless of dataset.
+    MELD's official train/valid/test split. Returns single-element lists so
+    callers can index [0] the same way they do for IEMOCAP's folds.
     """
     train_dataset = MELDRobertaDataset(features_path, split='train', roberta_idx=roberta_idx)
     val_dataset = MELDRobertaDataset(features_path, split='valid', roberta_idx=roberta_idx)
@@ -320,14 +230,10 @@ def get_loaders_meld(features_path, batch_size, num_workers=0, roberta_idx=1):
 
 def set_seed(seed, cuda):
     """
-    Seeds numpy/torch (CPU+GPU) AND forces cuDNN into deterministic mode,
-    so two runs with the same seed/config produce bit-identical results.
-    Without the cudnn flags, numpy/torch seeding alone isn't enough: cuDNN
-    is free to pick a non-deterministic algorithm (fastest available, not
-    necessarily reproducible) for ops like convolution/attention, so
-    results can still drift by small floating-point differences across
-    runs even with the RNGs seeded identically -- trades a bit of speed
-    for exact reproducibility.
+    Seeding the RNGs alone is NOT enough for reproducibility: cuDNN would
+    still pick whichever algorithm is fastest, which can differ between
+    runs and drift the result. The two cudnn flags are what actually make
+    same-seed runs bit-identical, at some cost in speed.
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -340,16 +246,10 @@ def set_seed(seed, cuda):
 
 def make_optimizer(params, args):
     """
-    args.optimizer picks 'adam' (default, torch.optim.Adam -- unchanged
-    behavior) or 'adamw' (torch.optim.AdamW). Plain Adam folds weight_decay
-    (args.l2) directly into the gradient before the adaptive-step-size
-    division, which distorts it away from true L2 regularization; AdamW
-    decouples weight decay from the gradient update instead (Loshchilov &
-    Hutter, 2017), now the de facto default in most modern training
-    recipes. Since args.l2 is actively tuned in this project (see
-    tune_lr_l2_*.py), switching to 'adamw' makes that hyperparameter behave
-    as theoretically intended -- but changes the regularization dynamics,
-    so lr/l2 tuned under one optimizer aren't assumed valid under the other.
+    Adam folds weight_decay into the gradient before the adaptive step,
+    distorting it; AdamW decouples it. Since l2 is actively tuned here, the
+    two optimizers are not interchangeable — lr/l2 tuned under one should be
+    re-tuned for the other.
     """
     optimizer_name = getattr(args, 'optimizer', 'adam')
     cls = {'adam': torch.optim.Adam, 'adamw': torch.optim.AdamW}[optimizer_name]
@@ -357,12 +257,6 @@ def make_optimizer(params, args):
 
 
 def build_model(args, adim, tdim, vdim):
-    """
-    Builds model.HypergraphERCModel — the VUE + Hypergraph architecture
-    (see context_graph.py / vue.py / hypergraph.py): raw feature -> proj ->
-    prompt -> BiLSTM -> per-modality Context-Graph -> VUE -> Hypergraph ->
-    concat [a || t || v || e] -> classifier.
-    """
     model = HypergraphERCModel(
         adim, tdim, vdim,
         args.lstm_hidden_size,
@@ -405,7 +299,6 @@ def generate_inputs(audio_host, text_host, visual_host, audio_guest, text_guest,
     select_feat = torch.where(tmask == 0, feat1, feat2)
     input_features.append(select_feat)
     return input_features
-
 
 
 # Generate missing masks (mask) following CPM-Net method
@@ -528,9 +421,6 @@ def save_results(args, folder_f1, folder_acc, all_labels, all_preds, save_path_b
         else:
             f.write("Regression task - Classification report and confusion matrix are not applicable.\n")
 
-    # =======================================================
-    #  Export prediction results to Excel/CSV
-    # =======================================================
     if all_names is not None:
         print(f'Saving detailed predictions to {save_path_base}_predictions.xlsx')
         

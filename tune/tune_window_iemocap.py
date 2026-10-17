@@ -1,17 +1,3 @@
-"""
-Tunes windowp/windowf (symmetric, windowp=windowf=w) for the teacher on
-IEMOCAPSix, standard leave-one-session-out protocol (see
-train_teacher_iemocap.py's module docstring): all 4 train sessions used,
-fixed epochs, no validation split. lr/l2 are held FIXED at the values
-tune_lr_l2_iemocap.py found best (lr=0.0001, l2=0.0001). Repeated across
-multiple seeds to report mean/std of the 5-fold CV test F1 per window
-value.
-
-Isolated and deletable: only imports from train_teacher.py / utils.py /
-loss.py, and nothing imports this file back. Results are written to their
-own .txt file under output/tune/, plus printed to the console.
-"""
-
 import os
 import sys
 import time

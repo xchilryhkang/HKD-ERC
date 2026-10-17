@@ -1,27 +1,3 @@
-"""
-Trains the student for MELD using a GENUINE validation split (see
-train_teacher_meld.py's module docstring for the full data-source
-rationale -- same utils.get_loaders_meld, same two merged pkl files).
-
-Early stopping tracks the REAL valid split every epoch and keeps the
-checkpoint from whichever epoch scored best on it. All five distillation
-losses (KD / proto / OT / e_proto / node_rel) and their lambda_* weights,
-kd_temperature, ot_epsilon/ot_iters, prompt_type etc. all work exactly as
-in train_student.py / train_student_iemocap.py -- only the data source
-(single genuine train/valid/test split, not 5-fold CV) differs.
-
-Isolated and deletable: reuses concat_repr/compute_teacher_prototypes/
-train_or_eval_student/etc. from train_student.py and utils.py (which
-already branches on args.dataset == 'MELD' for the one-hot-speaker ->
-qmask_9 conversion), but nothing imports this file back, so it can be
-deleted without side effects. Saves checkpoints via the SAME
-save_student_checkpoint(dataset='MELD', fold_index=0) path train_student.py
-uses -- running this will overwrite MELD's existing student checkpoint.
-Requires a teacher checkpoint for MELD to already exist under
-output/model/teacher/ -- run train_teacher_meld.py / run_teacher_meld.ps1
-first if it doesn't.
-"""
-
 import os
 import sys
 import time

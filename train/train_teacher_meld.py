@@ -1,28 +1,3 @@
-"""
-Trains the teacher for MELD using a GENUINE validation split (not the
-leave-one-session-out protocol IEMOCAP needs -- MELD has one official
-split: train(1038)/valid(114)/test(280) dialogues).
-
-Uses utils.get_loaders_meld, which reads everything from one
-self-contained pkl (path.PATH_MELD): 4 emotion-finetuned RoBERTa-Large
-text variants (--roberta-idx picks which, 1-4), 300d audio, 342d visual,
-speakers, labels, and the official split. See
-dataloader_meld.MELDRobertaDataset's docstring for the field layout.
-
-Early stopping tracks this REAL valid split every epoch and keeps the
-checkpoint from whichever epoch scored best on it -- unlike the IEMOCAP
-scripts, there is no "no separate validation" caveat here: MELD actually
-has one.
-
-Isolated and deletable: reuses train_or_eval_model/build_model/etc. from
-train_teacher.py and utils.py (train_or_eval_model already branches on
-args.dataset == 'MELD' for the one-hot-speaker -> qmask_9 conversion, so
-nothing there needs duplicating), but nothing imports this file back, so
-it can be deleted without side effects. Saves checkpoints via the SAME
-save_teacher_checkpoint(dataset='MELD', fold_index=0) path train_teacher.py
-uses -- running this will overwrite MELD's existing teacher checkpoint.
-"""
-
 import os
 import sys
 import time

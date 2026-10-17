@@ -1,34 +1,3 @@
-"""
-Knowledge-distillation losses between a full-modality teacher
-(model.HypergraphERCModel run with mask_rate=0.0, prompt_type='none') and
-an incomplete-modality student (same architecture, mask_rate>0,
-prompt_type='prototype'/'constant'/'none').
-
-Signals implemented so far:
-  - MaskedKLLoss: response-level, KL(student || teacher) on log_prob.
-  - PrototypeRelationLoss: relational — match similarity-to-class-prototype
-    patterns rather than absolute feature positions. Used both on r =
-    concat([a,t,v,e]) and, separately, on the 'e' (VUE/consensus) node
-    alone, so 'e' gets its own sharp prototype-relational gradient instead
-    of only an indirect one through the concatenated vector.
-  - SinkhornOTLoss (+ compute_ot_cost_matrix): optimal transport between the
-    two class-probability distributions, with a ground cost that makes
-    confusing a class for a semantically NEAR one (happy<->excited) cheap
-    and a FAR one (happy<->sad) expensive — "near/far" taken from the
-    teacher prototype geometry PrototypeRelationLoss already computes.
-  - NodeRelationLoss: structural — match how the 'e' node relates to each
-    modality node (a,t,v) AFTER hypergraph refinement, within each model's
-    own feature space (teacher's own relation pattern vs student's own).
-    This is the hypergraph-node analogue of PrototypeRelationLoss: instead
-    of class prototypes, the "reference points" are the model's own other
-    nodes for that same utterance.
-
-Still-open candidate for later, per hypergraph.py's HypergraphConvLayer
-docstring: gamma^hg (the hyperedge attention weights) as a distillation
-target in its own right, beyond the node outputs NodeRelationLoss already
-uses.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,20 +5,13 @@ import torch.nn.functional as F
 
 class MaskedKLLoss(nn.Module):
     """
-    Response-level KD: KL(student || teacher) on the classification head,
-    with temperature scaling, masked to valid (non-padded) utterances.
+    Temperature-scaled KL(student || teacher) on the head, masked to valid
+    utterances. Inputs are [T, B, C] log_prob (model.py log_softmaxes
+    internally), umask is [B, T].
 
-    log_prob_student, log_prob_teacher: [T, B, C] — model.py's `log_prob`
-    output (already log_softmax'd internally, NOT raw logits). Re-softening
-    via log_softmax(log_prob / T) is therefore an approximation — it treats
-    log_prob as a logits proxy, which is the common workaround when the
-    model only exposes log-probabilities rather than raw logits. If more
-    precise response-KD is needed later, the cleanest fix is to have
-    HypergraphERCModel.forward also return the pre-log_softmax logits
-    (a small addition to model.py's return tuple — not done here since it
-    would ripple through every tune_*.py script's unpacking).
-
-    umask: [B, T]
+    Re-softening log_prob as if it were logits is an approximation; getting
+    it exact would mean returning raw logits from the model too, which would
+    ripple through every caller's unpacking.
     """
 
     def __init__(self, temperature=2.0):
@@ -74,25 +36,13 @@ class MaskedKLLoss(nn.Module):
 
 class PrototypeRelationLoss(nn.Module):
     """
-    Relational prototype KD: instead of pulling student features onto the
-    teacher's absolute positions (fragile when the two spaces differ in
-    scale), match the RELATIVE structure — how each valid utterance is
-    similarity-distributed around each class prototype.
+    Matches the RELATIVE structure of each model's own feature space —
+    cosine similarity of every utterance to its class prototypes — rather
+    than pulling student features onto the teacher's absolute positions,
+    which is fragile when the two spaces differ in scale.
 
-    Per batch (valid utterances only — padding already removed by caller):
-      present   = classes that appear in the batch
-      p_s[c]    = mean of student features r_s with label c   (recomputed per batch, has grad)
-      p_t[c]    = teacher prototype for class c               (fixed, precomputed per fold)
-      S_s       = cos(r_s, p_s[present])  -> [|present|, N]
-      S_t       = cos(r_t, p_t[present])  -> [|present|, N]
-      loss      = mean((S_s - S_t)^2)     (mean over all |present| x N entries)
-
-    Using the SAME `present` set for both models keeps the two graphs'
-    rows aligned; absent classes simply contribute nothing for that batch.
-
-    r_s, r_t: [N, D] — teacher side must be detached (no_grad upstream)
-    labels:   [N]
-    proto_t:  [K, D] — teacher prototypes, indexed by class id
+    r_s, r_t [N, D] (teacher side detached), labels [N], proto_t [K, D].
+    Both sides use the same `present` class set so their rows stay aligned.
     """
 
     def forward(self, r_s, r_t, labels, proto_t):
@@ -112,15 +62,12 @@ class PrototypeRelationLoss(nn.Module):
 
 def compute_ot_cost_matrix(proto_t):
     """
-    Ground cost C for SinkhornOTLoss: Euclidean distance between teacher
-    prototypes, AFTER L2-normalizing them (so this is on the same footing
-    as PrototypeRelationLoss's cosine — ||a_hat - b_hat||^2 = 2 - 2*cos(a,b)
-    for unit vectors — rather than raw-magnitude distance, which the
-    anisotropy already observed in this feature space would otherwise
-    distort), then scaled to [0, 1] by the largest pairwise distance.
+    Ground cost for SinkhornOTLoss: pairwise distance between teacher
+    prototypes [K, D] -> [K, K] in [0, 1].
 
-    proto_t: [K, D] teacher prototypes (same ones PrototypeRelationLoss uses).
-    returns: [K, K], C[k,k] = 0, C[k,l] in (0, 1] for k != l.
+    Prototypes are L2-normalized first so the cost is cosine-based like
+    PrototypeRelationLoss; raw-magnitude distance would be distorted by
+    this feature space's anisotropy.
     """
     p_hat = F.normalize(proto_t, dim=-1)
     D = torch.cdist(p_hat, p_hat, p=2)
@@ -129,32 +76,13 @@ def compute_ot_cost_matrix(proto_t):
 
 class SinkhornOTLoss(nn.Module):
     """
-    Optimal-transport KD: instead of matching the teacher's and student's
-    class-probability distributions independently per class (MaskedKLLoss),
-    measure the cost of "pouring" P_i into Q_i under a ground cost C that
-    makes confusing semantically close classes cheap and distant ones
-    expensive (see compute_ot_cost_matrix). Computed per utterance, over
-    the full K classes (every class always has nonzero softmax mass, so —
-    unlike PrototypeRelationLoss — there is no present/absent-class case
-    to handle here).
+    Entropic-regularized (Sinkhorn) OT between the teacher's and student's
+    class distributions, under a ground cost that makes confusing close
+    classes cheap and distant ones expensive — unlike MaskedKLLoss, which
+    treats every class as equally far apart.
 
-    Entropic-regularized (Sinkhorn) OT, batched over all N valid utterances
-    at once: C (and its kernel exp(-C/eps)) is the SAME [K, K] matrix for
-    every utterance (it only depends on the fixed teacher prototypes), so
-    only u, v [N, K] vary per utterance — no loop over utterances needed.
-
-        K      = exp(-C / epsilon)                         [K, K]
-        u, v   = ones [N, K]
-        repeat n_iters times:
-            u = P / (v @ K^T)         (row marginal)
-            v = Q / (u @ K)           (column marginal)
-        gamma_i = diag(u_i) K diag(v_i)                     [K, K] per utterance
-        loss_i  = sum(gamma_i * C)
-        L_OT    = mean_i(loss_i)
-
-    P, Q: [N, K] probability distributions (rows sum to 1). P is the
-    teacher's (must already be detached — it is, since it comes from a
-    no_grad forward pass upstream); Q is the student's, with gradient.
+    P, Q [N, K] are row-stochastic; P is the teacher's (detached upstream).
+    C is the same [K, K] for every utterance, so all N are solved at once.
     """
 
     def __init__(self, epsilon=0.1, n_iters=50):
@@ -178,28 +106,17 @@ class SinkhornOTLoss(nn.Module):
 
 class NodeRelationLoss(nn.Module):
     """
-    Structural KD on the hypergraph's own node graph: match how the 'e'
-    (VUE/consensus) node relates to each modality node (a, t, v) AFTER
-    hypergraph refinement, between teacher and student — WITHIN each
-    model's own feature space rather than across the two models directly.
+    Matches how the 'e' (consensus) node relates to a/t/v after hypergraph
+    refinement: per utterance, [cos(e,a), cos(e,t), cos(e,v)] computed
+    WITHIN each model, then compared.
 
-    Teacher and student are independently-trained networks, so their raw
-    h_final vectors live in different coordinate systems even when the
-    RELATIONAL structure they encode is nearly identical (confirmed via
-    analyze_distribution.py's tsne_overlap_per_modality.png: teacher and
-    student occupy fully separate regions per modality, yet
-    proto_structure_corr between them is ~0.99). Matching absolute
-    positions would fight that mismatch for no benefit; matching each
-    model's own internal e-vs-modality relation pattern does not.
+    Teacher and student are separately trained, so their h_final vectors sit
+    in different coordinate systems even when the structure they encode is
+    nearly identical (they occupy disjoint t-SNE regions yet their prototype
+    structure correlates ~0.99). Comparing relations rather than absolute
+    positions sidesteps that mismatch.
 
-    Per valid utterance i, within one model:
-        S_i = [cos(e_i, a_i), cos(e_i, t_i), cos(e_i, v_i)]   (3,)
-
-    loss = mean((S_student - S_teacher) ** 2) over all valid utterances.
-
-    h_final_s, h_final_t: dict {'a','t','v','e': [N, D]} — already
-    flattened to valid utterances by the caller. The teacher side must
-    come from a no_grad forward pass upstream.
+    h_final_s/_t: {'a','t','v','e': [N, D]}, teacher side detached upstream.
     """
 
     def forward(self, h_final_s, h_final_t):

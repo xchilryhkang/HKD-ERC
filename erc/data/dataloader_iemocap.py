@@ -12,9 +12,6 @@ from torch.nn.utils.rnn import pad_sequence
 ## Get name2features mapping based on label file and feature path
 def read_data(label_path, feature_root):
 
-    # ============================ #
-    #     Read information from label file
-    # ============================ #
     names = []
     speakers = []
 
@@ -32,9 +29,6 @@ def read_data(label_path, feature_root):
         names.extend(uids_video)
         speakers.extend(spks_video)
 
-    # ============================ #
-    #      Load corresponding feature data
-    # ============================ #
     features = []
     feature_dim = -1
 
@@ -78,9 +72,6 @@ def read_data(label_path, feature_root):
 
         features.append(feature)
 
-    # ============================ #
-    #     Build name -> feature mapping
-    # ============================ #
     print(f'Input feature {feature_root} ===> dim is {feature_dim}')
     assert len(names) == len(features), f'Error: len(names) != len(features)'
 
@@ -89,8 +80,6 @@ def read_data(label_path, feature_root):
         name2feats[names[ii]] = features[ii]
 
     return name2feats, feature_dim
-
-
 
 
 def _feature_cache_path(label_path, audio_root, text_root, video_root):
@@ -148,10 +137,6 @@ class IEMOCAPDataset(Dataset):
             print(f'audio dimension: {self.adim}; text dimension: {self.tdim}; video dimension: {self.vdim}')
             return
 
-        # ========================= #
-        # Read feature data for three modalities
-        # Returns mapping of name -> {'F': [...], 'M': [...]} and feature dimension
-        # ========================= #
         name2audio, adim = read_data(label_path, audio_root)
         name2text, tdim = read_data(label_path, text_root)
         name2video, vdim = read_data(label_path, video_root)
@@ -160,9 +145,6 @@ class IEMOCAPDataset(Dataset):
         self.tdim = tdim
         self.vdim = vdim
 
-        # ========================= #
-        # Initialize dictionaries for multimodal, labels, speakers, etc.
-        # ========================= #
         self.max_len = -1
 
         self.videoAudioHost = {}
@@ -178,9 +160,6 @@ class IEMOCAPDataset(Dataset):
 
         speakermap = {'F': 0, 'M': 1}
 
-        # ========================= #
-        # Load multiple structured information from label file
-        # ========================= #
         (self.videoIDs,
          self.videoLabels,
          self.videoSpeakers,
@@ -238,10 +217,6 @@ class IEMOCAPDataset(Dataset):
             ), f, protocol=pickle.HIGHEST_PROTOCOL)
         print(f'Cached processed features to {cache_path}')
 
-    # ========================= #
-    # Override __getitem__ method
-    # Returns multimodal features and labels etc. for the video at the corresponding index
-    # ========================= #
     def __getitem__(self, index):
         vid = self.vids[index]
         return torch.FloatTensor(self.videoAudioHost[vid]),\
