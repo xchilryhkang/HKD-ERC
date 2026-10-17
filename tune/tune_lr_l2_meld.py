@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import path
-from src.utils import get_loaders_meld, build_model, set_seed
+from src.utils import get_loaders_meld, build_model, set_seed, make_optimizer
 from train.train_teacher import train_or_eval_model
 from src.losses.loss import MaskedCELoss
 
@@ -31,6 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('--seeds', type=str, default='197,649,722',
                         help='Comma-separated training seeds.')
     parser.add_argument('--roberta-idx', type=int, default=1, choices=[1, 2, 3, 4])
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'])
     parser.add_argument('--skip-combos', type=int, default=0,
                         help='Skip the first N (lr,l2) combos in iteration order (resume mid-sweep).')
     parser.add_argument('--append-to', type=str, default=None,
@@ -82,7 +83,7 @@ if __name__ == '__main__':
         out_dir = os.path.join(path.SAVED_ROOT, 'tune')
         os.makedirs(out_dir, exist_ok=True)
         time_now = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M_%S')
-        result_path = os.path.join(out_dir, f'{time_now}_lr_l2_sweep_meld.txt')
+        result_path = os.path.join(out_dir, f'{time_now}_lr_l2_sweep_meld_{args.optimizer}.txt')
 
     def log(msg):
         print(msg)
@@ -92,7 +93,7 @@ if __name__ == '__main__':
     if args.skip_combos:
         log(f'\n===== RESUMING from combo {args.skip_combos + 1}/{n_combos} (skipping first {args.skip_combos}) =====')
     else:
-        log(f'lr x l2 tune (MELD, genuine train/valid/test split)')
+        log(f'lr x l2 tune (MELD, genuine train/valid/test split) — optimizer={args.optimizer}')
         log(f'lrs={lrs}  l2s={l2s}  ({n_combos} combos)  training_seeds={seeds}  '
             f'epochs_cap={args.epochs}  early_stop_patience={args.early_stop_patience}')
         log(f'lstm_hidden_size={args.lstm_hidden_size}  graph-layers={args.graph_layers}  '
@@ -129,7 +130,8 @@ if __name__ == '__main__':
                 if cuda:
                     model.cuda()
                     cls_loss.cuda()
-                optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=l2)
+                args.lr, args.l2 = lr, l2
+                optimizer = make_optimizer(model.parameters(), args)
 
                 best_val_f1, best_model_state, no_improve = 0.0, None, 0
                 for epoch in range(args.epochs):

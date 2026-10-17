@@ -9,7 +9,8 @@ param(
     [double]$Lr = 0.00005,
     [double]$L2 = 0.0001,
     [int]$Seed = 50,
-    [int]$RobertaIdx = 1
+    [int]$RobertaIdx = 1,
+    [string]$Optimizer = 'adamw'
 )
 
 Set-Location -Path (Join-Path $PSScriptRoot '..')
@@ -19,6 +20,7 @@ Set-Location -Path (Join-Path $PSScriptRoot '..')
     --graph-layers 1 `
     --hg-layers 1 `
     --lr $Lr `
+    --optimizer $Optimizer `
     --l2 $L2 `
     --dropout 0.1 `
     --prompt-type $PromptType `

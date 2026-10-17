@@ -82,8 +82,10 @@ if __name__ == '__main__':
     parser.add_argument('--early-stop-delta', type=float, default=0.001)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--seed', type=int, default=50)
-    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'],
-                        help='See utils.make_optimizer for why adamw may be worth testing.')
+    parser.add_argument('--optimizer', type=str, default='adamw', choices=['adam', 'adamw'],
+                        help='See utils.make_optimizer. A controlled sweep (tune_lr_l2_meld.py, '
+                             'same grid/seeds under both) found adam and adamw indistinguishable '
+                             'on MELD; adamw is the default so both datasets match.')
 
     args = parser.parse_args()
 
