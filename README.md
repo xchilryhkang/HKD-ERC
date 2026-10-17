@@ -67,43 +67,54 @@ script implements the right one for it):
 
 ```
 .
-├── model.py                        # HypergraphERCModel (the architecture above)
-├── context_graph.py                # Per-modality weighted-GAT message passing
-├── vue.py                          # VUEFusion (a/t/v -> consensus node v_hat)
-├── hypergraph.py                   # Cross-modal hypergraph message passing
-├── prompt.py                       # Missing-modality placeholder prompting
-├── graph.py                        # batch_graphify: utterances -> graph edges
-├── loss.py                         # MaskedCELoss
-├── kd_losses.py                    # KD/OT/prototype/node-relation distillation losses
-├── utils.py                        # loaders, optimizer/seed helpers, checkpoint I/O
-├── path.py                         # Dataset/output path configuration
+├── erc/                            # the importable library — never run directly
+│   ├── path.py                     # dataset/output path configuration
+│   ├── utils.py                    # loaders, optimizer/seed helpers, checkpoint I/O
+│   ├── models/
+│   │   ├── model.py                # HypergraphERCModel (the architecture above)
+│   │   ├── context_graph.py        # per-modality weighted-GAT message passing
+│   │   ├── vue.py                  # VUEFusion (a/t/v -> consensus node v_hat)
+│   │   ├── hypergraph.py           # cross-modal hypergraph message passing
+│   │   ├── prompt.py               # missing-modality placeholder prompting
+│   │   └── graph.py                # batch_graphify: utterances -> graph edges
+│   ├── data/
+│   │   ├── dataloader_iemocap.py   # IEMOCAP dataset + loaders
+│   │   └── dataloader_meld.py      # MELD dataset + loaders (merges two feature files)
+│   └── losses/
+│       ├── loss.py                 # MaskedCELoss
+│       └── kd_losses.py            # KD/OT/prototype/node-relation distillation losses
 │
-├── dataloader_iemocap.py           # IEMOCAP dataset + loaders
-├── dataloader_meld.py              # MELD dataset + loaders (merges two feature files)
+├── train/                          # training entry points
+│   ├── train_teacher.py            # shared teacher loop (train_or_eval_model)
+│   ├── train_student.py            # shared student loop (train_or_eval_student)
+│   ├── train_teacher_iemocap.py    # teacher, IEMOCAP 5-fold leave-one-session-out CV
+│   ├── train_student_iemocap.py    # student, IEMOCAP 5-fold leave-one-session-out CV
+│   ├── train_teacher_meld.py       # teacher, MELD genuine train/valid/test split
+│   └── train_student_meld.py       # student, MELD genuine train/valid/test split
 │
-├── train_teacher.py                # Generic teacher training loop (used by MELD)
-├── train_student.py                # Generic student training loop (used by MELD)
-├── train_teacher_iemocap.py        # Teacher, IEMOCAP 5-fold leave-one-session-out CV
-├── train_student_iemocap.py        # Student, IEMOCAP 5-fold leave-one-session-out CV
-├── train_teacher_meld.py           # Teacher, MELD genuine train/valid/test split
-├── train_student_meld.py           # Student, MELD genuine train/valid/test split
+├── tune/                           # hyperparameter sweeps, one per (hyperparam, dataset)
+│   ├── tune_lr_l2_iemocap.py       tune_lr_l2_meld.py
+│   ├── tune_window_iemocap.py      tune_window_meld.py
+│   ├── tune_lambda_prob_rel_iemocap.py   tune_lambda_prob_rel_meld.py
+│   └── tune_dropout_meld.py        tune_heads_meld.py   tune_hidden_dim_meld.py
 │
-├── tune_*.py                       # Hyperparameter sweeps (lr/l2, hidden_dim, window,
-│                                    #   dropout, heads, lambda_prob/lambda_rel, ...),
-│                                    #   one pair of {teacher,student} x {iemocap,meld}
-│                                    #   scripts per hyperparameter
-├── plot_lambda_sweep_3d.py         # 3D bar plot for a lambda_rel x lambda_prob sweep
-├── analyze_distribution.py         # t-SNE, confidence/drift, teacher-vs-student metrics
+├── analysis/
+│   ├── analyze_distribution.py     # t-SNE, confidence/drift, teacher-vs-student metrics
+│   └── plot_lambda_sweep_3d.py     # 3D bar plot for a lambda_rel x lambda_prob sweep
 │
-├── run_teacher_iemocap6.ps1 / .sh  # Wrapper scripts (Windows PowerShell / bash)
-├── run_student_iemocap6.ps1 / .sh
-├── run_teacher_meld.ps1
-├── run_student_meld.ps1
-├── run_pipeline_iemocap6.ps1       # Full teacher -> student -> analysis pipeline
+├── scripts/                        # shell wrappers with the project's tuned defaults
+│   ├── run_teacher_iemocap6.ps1 / .sh    run_student_iemocap6.ps1 / .sh
+│   ├── run_teacher_meld.ps1              run_student_meld.ps1
+│   └── run_pipeline_iemocap6.ps1   # full teacher -> student -> analysis pipeline
 │
 ├── environment.yml                 # Conda environment (Python 3.8)
 └── requirements.txt                # Pip-only install (e.g. for Kaggle/Colab notebooks)
 ```
+
+Everything under `erc/` is library code imported as `from erc.utils import ...`;
+everything under `train/`, `tune/` and `analysis/` is an entry point you run directly.
+Entry points put the repo root on `sys.path` themselves, so they work from any working
+directory without installing the package.
 
 `dataset/`, `output/` and the local virtual environment folder are gitignored — see
 **Data Preparation** and **Outputs** below.
@@ -173,15 +184,15 @@ repo root by default, so no absolute paths are hardcoded).
 ### Teacher, then student (IEMOCAP, 6-class)
 
 ```bash
-python train_teacher_iemocap.py --dataset IEMOCAPSix
-python train_student_iemocap.py --dataset IEMOCAPSix --mask-type constant-0.1 --prompt-type none
+python train/train_teacher_iemocap.py --dataset IEMOCAPSix
+python train/train_student_iemocap.py --dataset IEMOCAPSix --mask-type constant-0.1 --prompt-type none
 ```
 
 ### Teacher, then student (MELD)
 
 ```bash
-python train_teacher_meld.py
-python train_student_meld.py --mask-type constant-0.1 --prompt-type none
+python train/train_teacher_meld.py
+python train/train_student_meld.py --mask-type constant-0.1 --prompt-type none
 ```
 
 Key student flags: `--mask-type constant-<rate>` (missing-modality rate at train+eval
@@ -189,20 +200,20 @@ time), `--prompt-type {none,constant,prototype}`, `--lambda-prob/--lambda-proto/
 --lambda-rel` (distillation loss weights, each default 1.0; CE is always fixed at 1).
 Run any script with `--help` for the full flag list.
 
-On Windows, `run_teacher_iemocap6.ps1` / `run_student_iemocap6.ps1` (PowerShell) and
-their `.sh` equivalents (Git Bash/WSL) wrap the same scripts with the project's current
-tuned defaults.
+On Windows, `scripts/run_teacher_iemocap6.ps1` / `scripts/run_student_iemocap6.ps1`
+(PowerShell) and their `.sh` equivalents (Git Bash/WSL) wrap the same scripts with the
+project's current tuned defaults, and can be run from anywhere.
 
 ## Hyperparameter Tuning
 
-`tune_lr_l2_*.py`, `tune_hidden_dim_meld.py`, `tune_window_*.py`, `tune_dropout_*.py`,
-`tune_heads_*.py` and `tune_lambda_prob_rel_*.py` each sweep one hyperparameter (teacher
-or student side, IEMOCAP or MELD), tracking the same held-out metric used by the
-corresponding `train_*.py` script. Results are written to `output/tune/*.txt`. Example:
+Each script in `tune/` sweeps one hyperparameter for one dataset, tracking the same
+held-out metric as the corresponding `train/` script. Results go to `output/tune/*.txt`.
+Long sweeps support `--max-combos` / `--skip-combos` / `--append-to` so they can be split
+across sessions. Example:
 
 ```bash
-python tune_lambda_prob_rel_iemocap.py --mask-rate 0.3
-python plot_lambda_sweep_3d.py --log output/tune/<sweep file>.txt
+python tune/tune_lambda_prob_rel_iemocap.py --mask-rate 0.3
+python analysis/plot_lambda_sweep_3d.py --log output/tune/<sweep file>.txt
 ```
 
 ## Analysis
@@ -213,7 +224,7 @@ their class-probability distributions, prototype-structure correlation, and t-SN
 (concatenated and per-modality, both class-colored and source-colored overlays).
 
 ```bash
-python analyze_distribution.py --dataset IEMOCAPSix --folds 0,1,2,3,4 --mask-rate 0.1
+python analysis/analyze_distribution.py --dataset IEMOCAPSix --folds 0,1,2,3,4 --mask-rate 0.1
 ```
 
 ## Outputs

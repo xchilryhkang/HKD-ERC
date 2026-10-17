@@ -1,0 +1,176 @@
+"""
+Tunes lstm_hidden_size (-> hidden_dim = lstm_hidden_size * 2) for the
+teacher on MELD, using the genuine train(1038)/valid(114)/test(280) split
+(see train_teacher_meld.py's module docstring). lr/l2 are held FIXED at
+the values tune_lr_l2_meld.py found best (lr=0.00005, l2=0.0001).
+Repeated across multiple seeds to report mean/std of val/test F1 per
+hidden_size candidate -- no 5-fold CV here (MELD has a single official
+split), so each candidate is just train-to-best-val-checkpoint, once per
+seed.
+
+Selection criterion is mean_val_f1 -- mean_test_f1 is reported for
+reference only, never used to pick the winner.
+
+Isolated and deletable: only imports from train_teacher.py / utils.py /
+loss.py, and nothing imports this file back. Results are written to their
+own .txt file under output/tune/, plus printed to the console.
+"""
+
+import os
+import sys
+import time
+import argparse
+import datetime
+import copy
+
+import numpy as np
+import torch
+import torch.optim as optim
+
+# Make the repo root importable so `erc` / `train` resolve from any cwd.
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from erc import path
+from erc.utils import get_loaders_meld, build_model, set_seed
+from train.train_teacher import train_or_eval_model
+from erc.losses.loss import MaskedCELoss
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--hidden-sizes', type=str, default='64,128,256',
+                        help='Comma-separated lstm_hidden_size candidates (hidden_dim = 2x this).')
+    parser.add_argument('--lr', type=float, default=0.00005, help='Fixed lr (from tune_lr_l2_meld.py).')
+    parser.add_argument('--l2', type=float, default=0.0001, help='Fixed l2 (from tune_lr_l2_meld.py).')
+    parser.add_argument('--seeds', type=str, default='197,649,722',
+                        help='Comma-separated training seeds.')
+    parser.add_argument('--roberta-idx', type=int, default=1, choices=[1, 2, 3, 4])
+
+    parser.add_argument('--windowp', type=int, default=3)
+    parser.add_argument('--windowf', type=int, default=3)
+    parser.add_argument('--no-cuda', action='store_true', default=False)
+    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--epochs', type=int, default=100, help='Upper bound -- early stopping tracks the real valid split.')
+    parser.add_argument('--early-stop-patience', type=int, default=20)
+    parser.add_argument('--early-stop-delta', type=float, default=0.001)
+    parser.add_argument('--gpu', type=int, default=0)
+    parser.add_argument('--disable-bilstm', action='store_true', default=False)
+    parser.add_argument('--n-graph-heads', type=int, default=4)
+    parser.add_argument('--graph-layers', type=int, default=1)
+    parser.add_argument('--hg-layers', type=int, default=1)
+    parser.add_argument('--reliability-type', type=str, default='feature', choices=['scalar', 'feature'])
+    parser.add_argument('--vue-reliability-type', type=str, default='feature', choices=['scalar', 'feature'])
+    parser.add_argument('--disable-vue-reliability-gate', action='store_true', default=False)
+    parser.add_argument('--d-e', type=int, default=None)
+
+    args = parser.parse_args()
+    hidden_sizes = [int(x) for x in args.hidden_sizes.split(',')]
+    seeds = [int(x) for x in args.seeds.split(',')]
+
+    for hs in hidden_sizes:
+        assert (hs * 2) % args.n_graph_heads == 0, (
+            f'hidden_dim ({hs * 2}) must be divisible by n_graph_heads ({args.n_graph_heads})'
+        )
+
+    args.dataset = 'MELD'
+    args.num_folder = 1
+    args.n_classes = 7
+    args.n_speakers = 9
+    args.mask_type = 'constant-0.0'
+    args.prompt_type = 'none'
+    args.n_proto = 10
+    args.prompt_dim = None
+    args.use_bilstm = not args.disable_bilstm
+    args.use_vue_reliability_gate = not args.disable_vue_reliability_gate
+    args.device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
+    cuda = torch.cuda.is_available() and not args.no_cuda
+
+    n_combos = len(hidden_sizes)
+
+    out_dir = os.path.join(path.SAVED_ROOT, 'tune')
+    os.makedirs(out_dir, exist_ok=True)
+    time_now = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M_%S')
+    result_path = os.path.join(out_dir, f'{time_now}_hidden_dim_sweep_meld.txt')
+
+    def log(msg):
+        print(msg)
+        with open(result_path, 'a', encoding='utf-8') as f:
+            f.write(msg + '\n')
+
+    log(f'hidden_dim tune (MELD, genuine train/valid/test split)')
+    log(f'hidden_sizes={hidden_sizes} (hidden_dim=2x)  ({n_combos} candidates)  training_seeds={seeds}  '
+        f'lr={args.lr} (fixed)  l2={args.l2} (fixed)')
+    log(f'graph-layers={args.graph_layers}  hg-layers={args.hg_layers}  n-graph-heads={args.n_graph_heads}  '
+        f'dropout={args.dropout}  roberta_idx={args.roberta_idx}')
+    log('-' * 100)
+
+    print('\n========== Reading Data ==========\n')
+    assert os.path.exists(path.PATH_MELD_ROBERTA), 'PATH_MELD_ROBERTA not found!'
+    assert os.path.exists(path.PATH_MELD_AUDIOVISUAL), 'PATH_MELD_AUDIOVISUAL not found!'
+    train_loaders, val_loaders, test_loaders, adim, tdim, vdim = get_loaders_meld(
+        roberta_path=path.PATH_MELD_ROBERTA, audio_visual_path=path.PATH_MELD_AUDIOVISUAL,
+        batch_size=args.batch_size, num_workers=0, roberta_idx=args.roberta_idx
+    )
+    train_loader, val_loader, test_loader = train_loaders[0], val_loaders[0], test_loaders[0]
+
+    results = []
+
+    for hs in hidden_sizes:
+        args.lstm_hidden_size = hs
+        log(f'\n[hidden_size={hs} (hidden_dim={hs*2})]')
+
+        seed_val, seed_test = [], []
+        combo_start = time.time()
+
+        for seed in seeds:
+            set_seed(seed, cuda)
+
+            model = build_model(args, adim, tdim, vdim)
+            cls_loss = MaskedCELoss()
+            if cuda:
+                model.cuda()
+                cls_loss.cuda()
+            optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2)
+
+            best_val_f1, best_model_state, no_improve = 0.0, None, 0
+            for epoch in range(args.epochs):
+                train_or_eval_model(args, model, cls_loss, train_loader, mask_rate=0.0,
+                                     optimizer=optimizer, train=True)
+                val_acc, val_f1, _ = train_or_eval_model(
+                    args, model, cls_loss, val_loader, mask_rate=0.0, optimizer=None, train=False)
+                if val_f1 > best_val_f1 + args.early_stop_delta:
+                    best_val_f1, no_improve = val_f1, 0
+                    best_model_state = copy.deepcopy(model.state_dict())
+                else:
+                    no_improve += 1
+                    if no_improve >= args.early_stop_patience:
+                        break
+
+            model.load_state_dict(best_model_state)
+            test_acc, test_f1, _ = train_or_eval_model(
+                args, model, cls_loss, test_loader, mask_rate=0.0, optimizer=None, train=False)
+
+            log(f'    seed={seed} val_f1={best_val_f1:.4f} test_f1={test_f1:.4f}')
+            seed_val.append(best_val_f1)
+            seed_test.append(test_f1)
+
+        mean_val, std_val = float(np.mean(seed_val)), float(np.std(seed_val))
+        mean_test, std_test = float(np.mean(seed_test)), float(np.std(seed_test))
+        duration = time.time() - combo_start
+
+        log(f'>>>>> hidden_size={hs}: val_f1 mean={mean_val:.4f} std={std_val:.4f} | '
+            f'test_f1 mean={mean_test:.4f} std={std_test:.4f} | duration={duration:.1f}s >>>>>')
+
+        results.append((hs, mean_val, std_val, mean_test, std_test, duration))
+
+    log('\n===== SUMMARY (sorted by mean val_f1, best first) =====')
+    for hs, mean_val, std_val, mean_test, std_test, duration in sorted(results, key=lambda r: -r[1]):
+        log(f'hidden_size={hs:<5} (hidden_dim={hs*2:<5})  val_f1={mean_val:.4f}±{std_val:.4f}  '
+            f'test_f1={mean_test:.4f}±{std_test:.4f}  duration={duration:.1f}s')
+
+    log(f'\nFull log written to: {result_path}')
