@@ -62,11 +62,15 @@ if __name__ == '__main__':
     parser.add_argument('--kd-temperature', type=float, default=2.0)
     parser.add_argument('--ot-epsilon', type=float, default=0.1, help='Sinkhorn entropic regularization.')
     parser.add_argument('--ot-iters', type=int, default=50, help='Sinkhorn iterations.')
-    parser.add_argument('--lambda-prob', type=float, default=1.0,
+    # lambda_prob/lambda_rel defaults are the best combo from
+    # tune/tune_lambda_prob_rel_iemocap.py (IEMOCAPSix, mask_rate 0.3);
+    # IEMOCAPFour reuses them rather than being swept separately.
+    # lambda_proto was held at 1.0 during that sweep, never tuned.
+    parser.add_argument('--lambda-prob', type=float, default=0.4,
                         help='Weight for the prob cluster (KD + OT). 0 disables it.')
     parser.add_argument('--lambda-proto', type=float, default=1.0,
                         help='Weight for the proto cluster (r vs class prototypes). 0 disables it.')
-    parser.add_argument('--lambda-rel', type=float, default=1.0,
+    parser.add_argument('--lambda-rel', type=float, default=0.6,
                         help="Weight for the rel cluster (e_proto + node_rel). 0 disables it.")
 
     # ---- training (free to differ from the teacher) ---- #

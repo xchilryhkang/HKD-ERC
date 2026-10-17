@@ -11,8 +11,9 @@ LR=0.0002
 L2=0.00001
 OPTIMIZER=adamw
 DROPOUT=0.1
+LAMBDA_PROB=0.4
 LAMBDA_PROTO=1.0
-LAMBDA_REL=1.0
+LAMBDA_REL=0.6
 SEED=50
 
 while [[ $# -gt 0 ]]; do
@@ -23,6 +24,7 @@ while [[ $# -gt 0 ]]; do
         --l2) L2="$2"; shift 2 ;;
         --optimizer) OPTIMIZER="$2"; shift 2 ;;
         --dropout) DROPOUT="$2"; shift 2 ;;
+        --lambda-prob) LAMBDA_PROB="$2"; shift 2 ;;
         --lambda-proto) LAMBDA_PROTO="$2"; shift 2 ;;
         --lambda-rel) LAMBDA_REL="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
@@ -41,6 +43,7 @@ done
     --dropout "$DROPOUT" \
     --prompt-type "$PROMPT_TYPE" \
     --mask-type "constant-$MASK_RATE" \
+    --lambda-prob "$LAMBDA_PROB" \
     --lambda-proto "$LAMBDA_PROTO" \
     --lambda-rel "$LAMBDA_REL" \
     --seed "$SEED"
