@@ -21,12 +21,12 @@ raw feature -> proj -> prompt -> BiLSTM -> ContextGraphStack (per modality: a / 
                       concat [h_a || h_t || h_v || h_e] -> Linear -> log_prob
 ```
 
-- **ContextGraphStack** (`context_graph.py`): per-modality weighted GAT with
+- **ContextGraphStack** (`src/models/context_graph.py`): per-modality weighted GAT with
   speaker-consistency, multi-scale temporal-decay and content-reliability edge priors;
   residual-add (not concat) keeps every stage at one shared `hidden_dim`
   (`= lstm_hidden_size * 2`).
-- **VUEFusion** (`vue.py`): fuses `a/t/v` into a consensus node `v_hat` per utterance.
-- **HypergraphStack** (`hypergraph.py`): cross-modal message passing over
+- **VUEFusion** (`src/models/vue.py`): fuses `a/t/v` into a consensus node `v_hat` per utterance.
+- **HypergraphStack** (`src/models/hypergraph.py`): cross-modal message passing over
   `{a, t, v, e}` nodes.
 - **prompt.py**: fills placeholder (missing) modality slots — `none` / `constant` /
   `prototype` prompting, used only by the student.
@@ -49,7 +49,7 @@ raw feature -> proj -> prompt -> BiLSTM -> ContextGraphStack (per modality: a / 
   `proto` matches the student's representation to the teacher's class prototypes;
   `rel` matches the consensus node `e`'s own relational structure (to its class
   prototype, and to the other three nodes) between teacher and student feature spaces.
-  See `kd_losses.py` and `train_student.py`'s module docstring for the full derivation.
+  See `src/losses/kd_losses.py` and the loss assembly in `train/train_student.py`.
 
 ## Datasets
 
@@ -151,16 +151,17 @@ https://data.pyg.org/whl/ for that exact torch+CUDA combo.
 
 ## Data Preparation
 
-Download pre-processed features and lay them out to match `path.py`:
+Download pre-processed features and lay them out to match `src/path.py`:
 
 ```
 dataset/
 ├── IEMOCAP/                                   # 6-class (IEMOCAPSix)
-│   ├── IEMOCAP_features_raw_6way.pkl
-│   └── features/
-│       ├── wav2vec-large-c-UTT/
-│       ├── deberta-large-4-UTT/
-│       └── manet_UTT/
+│   ├── IEMOCAP_features_raw_6way.pkl          # labels, speakers, sentences
+│   ├── features/                               # ~30k loose .npy files
+│   │   ├── wav2vec-large-c-UTT/
+│   │   ├── deberta-large-4-UTT/
+│   │   └── manet_UTT/
+│   └── cache/                                  # written on first run, see below
 ├── IEMOCAPFour/                                # 4-class (IEMOCAPFour)
 │   ├── IEMOCAP_features_raw_4way.pkl
 │   └── features/...
@@ -177,6 +178,25 @@ dataset/
 
 If your paths differ, edit `src/path.py` directly (it resolves everything relative to
 the repo root by default, so no absolute paths are hardcoded).
+
+### The IEMOCAP feature cache
+
+Reading IEMOCAP means globbing and loading ~30k `.npy` files, so the first run folds
+the result into a single pkl under `dataset/IEMOCAP/cache/`, named after the label file
+and the three feature choices:
+
+```
+IEMOCAP_features_raw_6way__wav2vec-large-c-UTT__deberta-large-4-UTT__manet_UTT.pkl
+```
+
+That cache is **self-contained**: once it exists, neither the label pkl nor the
+`features/` tree is read again, so it is the only IEMOCAP file needed to train. Passing
+different `--audio-feature` / `--text-feature` / `--video-feature` values changes the
+name, so the cache cannot go stale against the features it was built from.
+
+This matters for notebook environments (Kaggle, Colab): upload the one ~230MB cache file
+rather than ~30k loose ones, keep it at `dataset/IEMOCAP/cache/<that exact name>`, and
+pass the same feature flags it was built with.
 
 ## How to Run
 
@@ -217,7 +237,7 @@ python analysis/plot_lambda_sweep_3d.py --log output/tune/<sweep file>.txt
 
 ## Analysis
 
-`analyze_distribution.py` loads a trained teacher+student pair and reports, per fold:
+`analysis/analyze_distribution.py` loads a trained teacher+student pair and reports, per fold:
 teacher-vs-student accuracy/F1, prediction agreement, Jensen-Shannon divergence between
 their class-probability distributions, prototype-structure correlation, and t-SNE plots
 (concatenated and per-modality, both class-colored and source-colored overlays).
