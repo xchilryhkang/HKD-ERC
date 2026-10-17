@@ -20,29 +20,19 @@ PATH_TO_LABEL_Win = {
 	'IEMOCAPFour': os.path.join(DATA_DIR_Win['IEMOCAPFour'], 'IEMOCAP_features_raw_4way.pkl'),# IEMOCAP 4-class labels
 }
 
-PATH_MELD = os.path.join(DATASET_ROOT, 'MELD', 'MELD_features_raw1.pkl')
-
-# MELD_features_raw1.pkl has real audio(300d)/visual(342d) features but no
-# genuine 3-way split (testVid is None -- see dataloader_meld.py's
-# MyMELDDataset fallback-to-valid-as-test behavior). Still used as the
-# audio/visual source below, since its own (lack of a) split isn't what
-# matters for that role.
+# The single self-contained MELD feature file: speakers, labels, 8
+# RoBERTa-Large text variants (fields [3]-[6] finetuned on emotion labels,
+# [7]-[10] un-finetuned "semantic"), audio (300d), visual (342d),
+# sentences, and the genuine train(1038)/valid(114)/test(280) split
+# matching MELD's official sizes.
 #
-# meld_emotion_features_roberta.pkl is the LEAN emotion-only text file:
-# speakers/labels/4 RoBERTa-Large text variants (finetuned on emotion
-# labels)/sentences, plus a genuine train(1038)/valid(114)/test(280) split
-# matching MELD's official sizes -- no audio/visual, no un-finetuned
-# "semantic" roberta variants (those live in the larger sibling file,
-# meld_emotion_semantic_features_roberta.pkl, deliberately not used here
-# to avoid loading ~280MB of unused text features).
-#
-# dataloader_meld.MELDRobertaDataset merges PATH_MELD_ROBERTA (text/
-# labels/split) with PATH_MELD_AUDIOVISUAL (audio/visual) by dialogue key
-# -- verified index-aligned via exact sentence match, and the audio/visual
-# arrays are numerically identical between the two "roberta" files and
-# MELD_features_raw1.pkl, so pairing with the lean one is safe.
-PATH_MELD_AUDIOVISUAL = PATH_MELD
-PATH_MELD_ROBERTA = os.path.join(DATASET_ROOT, 'MELD', 'meld_emotion_features_roberta.pkl')
+# This replaces an earlier two-file setup (a lean emotion-only text file
+# merged with MELD_features_raw1.pkl for audio/visual). Its audio/visual
+# arrays were verified numerically identical to MELD_features_raw1.pkl's,
+# and its text/labels/split identical to the lean file's, so reading this
+# one file changes nothing but the plumbing. It costs ~180MB more RAM
+# (the 4 semantic text variants are loaded but unused by default).
+PATH_MELD = os.path.join(DATASET_ROOT, 'MELD', 'meld_emotion_semantic_features_roberta.pkl')
 
 # Paths for model saving, data caching, and logging
 SAVED_ROOT = os.path.join(BASE, 'output')

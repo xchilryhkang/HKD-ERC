@@ -19,7 +19,7 @@ from sklearn.preprocessing import OneHotEncoder
 from erc import path
 from erc.models.model import HypergraphERCModel
 from erc.data.dataloader_iemocap import IEMOCAPDataset
-from erc.data.dataloader_meld import MyMELDDataset, MELDRobertaDataset
+from erc.data.dataloader_meld import MELDRobertaDataset
 
 import sys
 import copy
@@ -120,9 +120,9 @@ def get_loaders(dataset, batch_size, num_workers, meld_path=None, audio_root=Non
         print("INFO: Loading MELD dataset...")
         if meld_path is None:
             raise ValueError("MELD dataset requires the 'meld_path' argument (path to .pkl file).")
-        train_dataset = MyMELDDataset(path=meld_path, split='train')
-        val_dataset = MyMELDDataset(path=meld_path, split='valid')
-        test_dataset = MyMELDDataset(path=meld_path, split='test')
+        train_dataset = MELDRobertaDataset(meld_path, split='train')
+        val_dataset = MELDRobertaDataset(meld_path, split='valid')
+        test_dataset = MELDRobertaDataset(meld_path, split='test')
 
         # Create DataLoader
         train_loader = DataLoader(
@@ -291,21 +291,20 @@ def get_loaders_iemocap_innerval(dataset_name, audio_root, text_root, video_root
     return train_loaders, val_loaders, test_loaders, adim, tdim, vdim
 
 
-def get_loaders_meld(roberta_path, audio_visual_path, batch_size, num_workers=0, roberta_idx=1):
+def get_loaders_meld(features_path, batch_size, num_workers=0, roberta_idx=1):
     """
-    MELD loader using dataloader_meld.MELDRobertaDataset -- a GENUINE
-    train(1038)/valid(114)/test(280) split (matching MELD's official
-    sizes, unlike get_loaders' MELD branch whose val_loader silently
-    becomes the same as test_loader when the plain MELD_features_raw1.pkl
-    has no real testVid -- see that function/path.py's PATH_MELD_* comments).
+    MELD loader using dataloader_meld.MELDRobertaDataset -- MELD's GENUINE
+    train(1038)/valid(114)/test(280) split, read from one self-contained
+    feature file (path.PATH_MELD). Takes roberta_idx, which get_loaders'
+    MELD branch does not (that one always uses text variant 1).
 
     Returns single-element lists (train_loaders, val_loaders, test_loaders)
-    to match get_loaders'/get_loaders_iemocap_innerval's shape, so calling
-    code can index [0] uniformly regardless of dataset.
+    to match get_loaders' shape, so calling code can index [0] uniformly
+    regardless of dataset.
     """
-    train_dataset = MELDRobertaDataset(roberta_path, audio_visual_path, split='train', roberta_idx=roberta_idx)
-    val_dataset = MELDRobertaDataset(roberta_path, audio_visual_path, split='valid', roberta_idx=roberta_idx)
-    test_dataset = MELDRobertaDataset(roberta_path, audio_visual_path, split='test', roberta_idx=roberta_idx)
+    train_dataset = MELDRobertaDataset(features_path, split='train', roberta_idx=roberta_idx)
+    val_dataset = MELDRobertaDataset(features_path, split='valid', roberta_idx=roberta_idx)
+    test_dataset = MELDRobertaDataset(features_path, split='test', roberta_idx=roberta_idx)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                                collate_fn=train_dataset.collate_fn, num_workers=num_workers)

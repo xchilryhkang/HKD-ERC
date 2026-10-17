@@ -3,15 +3,11 @@ Trains the teacher for MELD using a GENUINE validation split (not the
 leave-one-session-out protocol IEMOCAP needs -- MELD has one official
 split: train(1038)/valid(114)/test(280) dialogues).
 
-Uses utils.get_loaders_meld, which merges two pkl files by dialogue key
-(see dataloader_meld.MELDRobertaDataset's docstring):
-  - path.PATH_MELD_ROBERTA (meld_emotion_features_roberta.pkl): lean,
-    emotion-only text file -- 4 RoBERTa-Large text variants (--roberta-idx
-    picks which one, 1-4, all finetuned on emotion labels), speakers,
-    labels, and the genuine train(1038)/valid(114)/test(280) split
-    matching MELD's official sizes.
-  - path.PATH_MELD_AUDIOVISUAL (MELD_features_raw1.pkl): real 300d audio /
-    342d visual features.
+Uses utils.get_loaders_meld, which reads everything from one
+self-contained pkl (path.PATH_MELD): 4 emotion-finetuned RoBERTa-Large
+text variants (--roberta-idx picks which, 1-4), 300d audio, 342d visual,
+speakers, labels, and the official split. See
+dataloader_meld.MELDRobertaDataset's docstring for the field layout.
 
 Early stopping tracks this REAL valid split every epoch and keeps the
 checkpoint from whichever epoch scored best on it -- unlike the IEMOCAP
@@ -105,10 +101,9 @@ if __name__ == '__main__':
     print(args)
 
     print('\n========== Reading Data ==========\n')
-    assert os.path.exists(path.PATH_MELD_ROBERTA), 'PATH_MELD_ROBERTA not found!'
-    assert os.path.exists(path.PATH_MELD_AUDIOVISUAL), 'PATH_MELD_AUDIOVISUAL not found!'
+    assert os.path.exists(path.PATH_MELD), 'PATH_MELD not found!'
     train_loaders, val_loaders, test_loaders, adim, tdim, vdim = get_loaders_meld(
-        roberta_path=path.PATH_MELD_ROBERTA, audio_visual_path=path.PATH_MELD_AUDIOVISUAL,
+        features_path=path.PATH_MELD,
         batch_size=args.batch_size, num_workers=0, roberta_idx=args.roberta_idx
     )
 

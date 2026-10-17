@@ -79,7 +79,7 @@ script implements the right one for it):
 │   │   └── graph.py                # batch_graphify: utterances -> graph edges
 │   ├── data/
 │   │   ├── dataloader_iemocap.py   # IEMOCAP dataset + loaders
-│   │   └── dataloader_meld.py      # MELD dataset + loaders (merges two feature files)
+│   │   └── dataloader_meld.py      # MELD dataset + loaders
 │   └── losses/
 │       ├── loss.py                 # MaskedCELoss
 │       └── kd_losses.py            # KD/OT/prototype/node-relation distillation losses
@@ -165,19 +165,18 @@ dataset/
 │   ├── IEMOCAP_features_raw_4way.pkl
 │   └── features/...
 └── MELD/
-    ├── MELD_features_raw1.pkl                  # audio(300d)/visual(342d) features
-    └── meld_emotion_features_roberta.pkl       # text (4 RoBERTa variants) + labels + split
+    └── meld_emotion_semantic_features_roberta.pkl   # everything: text + audio + visual + split
 ```
 
 - **IEMOCAP** pre-processed features: see the **SDR-GNN** / **GCNet** repositories.
-- **MELD** audio/visual features: see the **MMGCN** repository
-  (`MELD_features_raw1.pkl`). Text features come from a separate RoBERTa-Large
-  extraction (`meld_emotion_features_roberta.pkl`, emotion-finetuned, genuine
-  train/valid/test split) — `dataloader_meld.py`'s `MELDRobertaDataset` merges the two
-  by dialogue key.
+- **MELD**: one self-contained file holding 8 RoBERTa-Large text variants (4
+  emotion-finetuned, used by `--roberta-idx 1-4`; 4 un-finetuned "semantic", unused),
+  300d audio, 342d visual, speakers, labels, and MELD's official
+  train(1038)/valid(114)/test(280) split. Audio/visual originate from the **MMGCN**
+  features.
 
-If your paths differ, edit `path.py` directly (it resolves everything relative to the
-repo root by default, so no absolute paths are hardcoded).
+If your paths differ, edit `erc/path.py` directly (it resolves everything relative to
+the repo root by default, so no absolute paths are hardcoded).
 
 ## How to Run
 

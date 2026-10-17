@@ -105,10 +105,9 @@ if __name__ == '__main__':
     log('-' * 100)
 
     print('\n========== Reading Data ==========\n')
-    assert os.path.exists(path.PATH_MELD_ROBERTA), 'PATH_MELD_ROBERTA not found!'
-    assert os.path.exists(path.PATH_MELD_AUDIOVISUAL), 'PATH_MELD_AUDIOVISUAL not found!'
+    assert os.path.exists(path.PATH_MELD), 'PATH_MELD not found!'
     train_loaders, val_loaders, test_loaders, adim, tdim, vdim = get_loaders_meld(
-        roberta_path=path.PATH_MELD_ROBERTA, audio_visual_path=path.PATH_MELD_AUDIOVISUAL,
+        features_path=path.PATH_MELD,
         batch_size=args.batch_size, num_workers=0, roberta_idx=args.roberta_idx
     )
     train_loader, val_loader, test_loader = train_loaders[0], val_loaders[0], test_loaders[0]
