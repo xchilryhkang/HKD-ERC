@@ -95,7 +95,6 @@ def _feature_cache_path(label_path, audio_root, text_root, video_root):
         os.path.basename(video_root),
     ])
     cache_dir = os.path.join(os.path.dirname(label_path), 'cache')
-    os.makedirs(cache_dir, exist_ok=True)
     return os.path.join(cache_dir, f'{key}.pkl')
 
 
@@ -106,10 +105,11 @@ class IEMOCAPDataset(Dataset):
         Initialize dataset: Read features and labels, and build a dual-speaker feature alignment data structure.
 
         The expensive part (read_data's per-utterance glob+np.load loop over
-        all three modalities, ~20k+ filesystem calls) is cached to a single
-        pkl under <label_dir>/cache/ after the first load -- every later
-        call with the same label file + feature choice just unpickles it
-        instead of re-scanning the raw feature files.
+        all three modalities, ~30k filesystem calls) is cached to a single
+        pkl under <label_dir>/cache/ after the first load. That cache is
+        self-contained: once it exists, neither the label pkl nor the raw
+        feature directories are read again, so it is the only file needed
+        to run (handy for shipping the dataset to a notebook environment).
         """
         cache_path = _feature_cache_path(label_path, audio_root, text_root, video_root)
 
@@ -131,11 +131,15 @@ class IEMOCAPDataset(Dataset):
             self.videoSpeakersNew = cached['videoSpeakersNew']
             self.vids = cached['vids']
 
-            (self.videoIDs, self.videoLabels, self.videoSpeakers, self.videoSentences,
-             self.trainVid, self.testVid) = pickle.load(open(label_path, "rb"), encoding='latin1')
-
             print(f'audio dimension: {self.adim}; text dimension: {self.tdim}; video dimension: {self.vdim}')
             return
+
+        missing = [r for r in (label_path, audio_root, text_root, video_root) if not os.path.exists(r)]
+        if missing:
+            raise FileNotFoundError(
+                f'No feature cache at {cache_path}, and these are needed to build one '
+                f'but do not exist: {missing}'
+            )
 
         name2audio, adim = read_data(label_path, audio_root)
         name2text, tdim = read_data(label_path, text_root)
@@ -206,6 +210,7 @@ class IEMOCAPDataset(Dataset):
             self.videoLabelsNew[vid] = np.array(self.videoLabelsNew[vid])
             self.videoSpeakersNew[vid] = np.array(self.videoSpeakersNew[vid])
 
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         with open(cache_path, 'wb') as f:
             pickle.dump(dict(
                 adim=self.adim, tdim=self.tdim, vdim=self.vdim, max_len=self.max_len,

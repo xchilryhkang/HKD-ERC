@@ -109,7 +109,6 @@ if __name__ == '__main__':
     audio_root = os.path.join(path.PATH_TO_FEATURES_Win[args.dataset], args.audio_feature)
     text_root = os.path.join(path.PATH_TO_FEATURES_Win[args.dataset], args.text_feature)
     video_root = os.path.join(path.PATH_TO_FEATURES_Win[args.dataset], args.video_feature)
-    assert os.path.exists(audio_root) and os.path.exists(text_root) and os.path.exists(video_root), 'features not exist!'
     train_loaders, _unused_val_loaders, test_loaders, adim, tdim, vdim = get_loaders(
         audio_root=audio_root, text_root=text_root, video_root=video_root,
         num_folder=args.num_folder, batch_size=args.batch_size, dataset=args.dataset, num_workers=0
