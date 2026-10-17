@@ -102,7 +102,8 @@ script implements the right one for it):
 │   ├── analyze_distribution.py     # t-SNE, confidence/drift, teacher-vs-student metrics
 │   └── plot_lambda_sweep_3d.py     # 3D bar plot for a lambda_rel x lambda_prob sweep
 │
-├── scripts/                        # shell wrappers with the project's tuned defaults
+├── scripts/
+│   ├── prepare_iemocap.py          # pack IEMOCAP's loose .npy files into one pkl
 │   ├── run_teacher_iemocap6.ps1 / .sh    run_student_iemocap6.ps1 / .sh
 │   ├── run_teacher_meld.ps1              run_student_meld.ps1
 │   └── run_pipeline_iemocap6.ps1   # full teacher -> student -> analysis pipeline
@@ -179,24 +180,36 @@ dataset/
 If your paths differ, edit `src/path.py` directly (it resolves everything relative to
 the repo root by default, so no absolute paths are hardcoded).
 
-### The IEMOCAP feature cache
+### Packing IEMOCAP into one file
 
-Reading IEMOCAP means globbing and loading ~30k `.npy` files, so the first run folds
-the result into a single pkl under `dataset/IEMOCAP/cache/`, named after the label file
-and the three feature choices:
+IEMOCAP ships as ~30k loose `.npy` files, and scanning them takes around 9 minutes. Do
+it once, up front:
+
+```bash
+python scripts/prepare_iemocap.py --dataset IEMOCAPSix
+```
+
+That writes a single pkl under `dataset/IEMOCAP/cache/`, named after the label file and
+the three feature choices:
 
 ```
 IEMOCAP_features_raw_6way__wav2vec-large-c-UTT__deberta-large-4-UTT__manet_UTT.pkl
 ```
 
-That cache is **self-contained**: once it exists, neither the label pkl nor the
-`features/` tree is read again, so it is the only IEMOCAP file needed to train. Passing
-different `--audio-feature` / `--text-feature` / `--video-feature` values changes the
-name, so the cache cannot go stale against the features it was built from.
+The file is **self-contained**: once it exists, neither the label pkl nor the
+`features/` tree is read again, so it is the only IEMOCAP file needed to train. Training
+builds it on demand if it is missing, so this step is optional — it just means the cost
+lands in an explicit command rather than in your first training run.
 
-This matters for notebook environments (Kaggle, Colab): upload the one ~230MB cache file
-rather than ~30k loose ones, keep it at `dataset/IEMOCAP/cache/<that exact name>`, and
-pass the same feature flags it was built with.
+Because the name encodes the feature choices, a different `--audio-feature` /
+`--text-feature` / `--video-feature` produces a different file instead of silently
+reusing a mismatched one.
+
+**Running elsewhere (Kaggle, Colab):** build it locally, then upload only that one
+~230MB file rather than ~30k loose ones. Keep it at `dataset/IEMOCAP/cache/<that exact
+name>` (point `DATASET_ROOT` in `src/path.py` at wherever the data is mounted) and pass
+the same feature flags it was built with. If anything is off, the loader says which
+files it wanted and could not find.
 
 ## How to Run
 
