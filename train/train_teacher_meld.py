@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import path
-from src.utils import Logger, get_loaders_meld, build_model, save_teacher_checkpoint, make_optimizer, set_seed
+from src.utils import Logger, get_loaders_meld, build_model, save_teacher_checkpoint, make_optimizer, set_seed, compute_class_weights
 from src.losses.loss import MaskedCELoss
 from train.train_teacher import train_or_eval_model
 
@@ -47,6 +47,10 @@ if __name__ == '__main__':
     parser.add_argument('--disable-vue-reliability-gate', action='store_true', default=False)
     parser.add_argument('--hg-layers', type=int, default=1)
     parser.add_argument('--seed', type=int, default=50)
+    parser.add_argument('--class-weight', type=str, default='none',
+                        choices=['none', 'inverse', 'inverse-sqrt'],
+                        help='Re-weight CE by inverse class frequency of the TRAIN split '
+                             '(see utils.compute_class_weights). Default none = unchanged.')
     parser.add_argument('--optimizer', type=str, default='adamw', choices=['adam', 'adamw'],
                         help='See utils.make_optimizer. A controlled sweep (tune_lr_l2_meld.py, '
                              'same grid/seeds under both) found adam and adamw indistinguishable '
@@ -91,7 +95,11 @@ if __name__ == '__main__':
     start_time = time.time()
 
     model = build_model(args, adim, tdim, vdim)
-    cls_loss = MaskedCELoss()
+    cls_weight = None
+    if args.class_weight != 'none':
+        cls_weight = compute_class_weights(train_loader, args.n_classes, args.class_weight)
+        print(f'  class weights ({args.class_weight}): {[round(float(x), 3) for x in cls_weight]}')
+    cls_loss = MaskedCELoss(cls_weight)
     if cuda:
         model.cuda()
         cls_loss.cuda()

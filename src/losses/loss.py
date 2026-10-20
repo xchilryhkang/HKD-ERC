@@ -3,20 +3,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-## iemocap loss function: same with CE loss
 class MaskedCELoss(nn.Module):
-    def __init__(self):
+    """
+    CE over valid (non-padded) utterances.
+
+    `weight` optionally re-weights classes (see utils.compute_class_weights).
+    It lives on the loss object, never on the model, so model checkpoints are
+    unaffected and load the same with or without it.
+    """
+
+    def __init__(self, weight=None):
         super(MaskedCELoss, self).__init__()
-        self.loss = nn.NLLLoss(reduction='sum')
+        self.loss = nn.NLLLoss(weight=weight, reduction='sum')
 
     def forward(self, pred, target, umask):
-        """
-        Classification task loss (suitable for IEMOCAP), calculates NLLLoss for samples at valid positions.
-        """
-
         umask = umask.view(-1, 1)
-        target = target.view(-1, 1) 
+        target = target.view(-1, 1)
         pred = F.log_softmax(pred, 1)
 
-        loss = self.loss(pred * umask, (target * umask).squeeze().long()) / torch.sum(umask)
-        return loss
+        target_flat = (target * umask).squeeze().long()
+        total = self.loss(pred * umask, target_flat)
+
+        w = self.loss.weight
+        if w is None:
+            denom = torch.sum(umask)
+        else:
+            # Divide by the weights actually in play, not the sample count, so
+            # the loss keeps its scale instead of growing with a batch's share
+            # of rare classes -- otherwise CE would silently outweigh the
+            # distillation terms it is summed with in train_student.py.
+            denom = (w[target_flat] * umask.squeeze()).sum()
+
+        return total / denom.clamp(min=1e-8)

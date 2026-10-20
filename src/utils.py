@@ -228,6 +228,38 @@ def get_loaders_meld(features_path, batch_size, num_workers=0, roberta_idx=1):
     return [train_loader], [val_loader], [test_loader], adim, tdim, vdim
 
 
+def compute_class_weights(loader, n_classes, scheme='inverse'):
+    """
+    Class weights from a loader's own label distribution, counting only valid
+    (unpadded) positions. Always pass the TRAIN loader -- deriving weights
+    from valid/test would leak those splits into training.
+
+    Normalized to mean 1 so switching schemes changes the balance between
+    classes without changing the overall loss scale.
+
+    The counting pass consumes the dataloader's shuffling RNG, so the RNG
+    state is restored afterwards: enabling this must not, by itself, shift
+    the training stream and make runs incomparable.
+    """
+    np_state, torch_state = np.random.get_state(), torch.random.get_rng_state()
+    counts = torch.zeros(n_classes)
+    for data in loader:
+        umask, label = data[7], data[8]
+        valid = umask.reshape(-1).bool()
+        counts += torch.bincount(label.reshape(-1)[valid].long(), minlength=n_classes).float()
+    np.random.set_state(np_state)
+    torch.random.set_rng_state(torch_state)
+
+    freq = (counts / counts.sum()).clamp(min=1e-8)
+    if scheme == 'inverse':
+        w = 1.0 / freq
+    elif scheme == 'inverse-sqrt':
+        w = 1.0 / freq.sqrt()
+    else:
+        raise ValueError(f"scheme must be 'inverse' or 'inverse-sqrt', got {scheme!r}")
+    return w / w.mean()
+
+
 def set_seed(seed, cuda):
     """
     Seeding the RNGs alone is NOT enough for reproducibility: cuDNN would
