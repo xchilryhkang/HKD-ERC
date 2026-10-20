@@ -31,7 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('--seeds', type=str, default='197,649,722',
                         help='Comma-separated training seeds.')
     parser.add_argument('--roberta-idx', type=int, default=1, choices=[1, 2, 3, 4])
-    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'])
+    parser.add_argument('--optimizer', type=str, default='adamw', choices=['adam', 'adamw'])
     parser.add_argument('--skip-combos', type=int, default=0,
                         help='Skip the first N (lr,l2) combos in iteration order (resume mid-sweep).')
     parser.add_argument('--append-to', type=str, default=None,

@@ -8,13 +8,13 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3d projection)
 
 
 IEMOCAP_LINE_RE = re.compile(
-    r'^>>>>> lambda_rel=([\d.]+) lambda_prob=([\d.]+): sessionout_f1 mean=([\d.]+)'
+    r'^>>>>> lambda_proto=([\d.]+) lambda_rel=([\d.]+): sessionout_f1 mean=([\d.]+)'
 )
 # MELD sweep reports both val_f1 (model-selection signal) and test_f1 (held-out,
 # reported at the best-val checkpoint) -- test_f1 is the one comparable to
 # IEMOCAP's sessionout_f1 for plotting (both are held-out generalization numbers).
 MELD_LINE_RE = re.compile(
-    r'^>>>>> lambda_rel=([\d.]+) lambda_prob=([\d.]+): val_f1 mean=([\d.]+) std=[\d.]+ \| '
+    r'^>>>>> lambda_proto=([\d.]+) lambda_rel=([\d.]+): val_f1 mean=([\d.]+) std=[\d.]+ \| '
     r'test_f1 mean=([\d.]+)'
 )
 
@@ -73,8 +73,8 @@ def plot_3d_bar(results, title, out_path):
     ax.set_xticklabels([f'{v:g}' for v in lambda1_vals])
     ax.set_yticks(range(len(lambda2_vals)))
     ax.set_yticklabels([f'{v:g}' for v in lambda2_vals])
-    ax.set_xlabel(r'$\lambda_1$ (rel)', labelpad=10)
-    ax.set_ylabel(r'$\lambda_2$ (prob)', labelpad=10)
+    ax.set_xlabel(r'$\lambda_1$ (proto)', labelpad=10)
+    ax.set_ylabel(r'$\lambda_2$ (rel)', labelpad=10)
     ax.set_zlabel('WAF', labelpad=8)
     ax.set_zlim(z_floor, z_ceil)
     ax.view_init(elev=22, azim=-55)

@@ -25,16 +25,19 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--lambda-rels', type=str, default='0.2,0.4,0.6,0.8,1.0',
-                        help='Comma-separated lambda_rel candidates (lambda1 in the 3D plot).')
-    parser.add_argument('--lambda-probs', type=str, default='0.2,0.4,0.6,0.8,1.0',
-                        help='Comma-separated lambda_prob candidates (lambda2 in the 3D plot).')
-    parser.add_argument('--lambda-proto', type=float, default=1.0, help='Held fixed, not swept.')
+    parser.add_argument('--lambda-protos', type=str, default='1,10,50,100,200',
+                        help='lambda_proto candidates (lambda1 in the 3D plot). proto runs ~0.004x CE, '
+                             'so these map to roughly 0.2%%/2%%/10%%/19%%/32%% of total loss.')
+    parser.add_argument('--lambda-rels', type=str, default='1,5,25,50,100',
+                        help='lambda_rel candidates (lambda2 in the 3D plot). rel runs ~0.012x CE, '
+                             'so these map to roughly 0.7%%/4%%/16%%/27%%/43%% of total loss.')
+    parser.add_argument('--lambda-prob', type=float, default=1.0,
+                        help='Held fixed at 1: prob is already CE-scale (~0.63x), so it needs no rebalancing.')
     parser.add_argument('--seeds', type=str, default='50', help='Comma-separated training seeds.')
     parser.add_argument('--mask-rate', type=float, default=0.1, help="Student's missing rate at train+eval time.")
     parser.add_argument('--prompt-type', type=str, default='none', choices=['none', 'constant', 'prototype'])
     parser.add_argument('--roberta-idx', type=int, default=1, choices=[1, 2, 3, 4])
-    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'])
+    parser.add_argument('--optimizer', type=str, default='adamw', choices=['adam', 'adamw'])
     parser.add_argument('--lr', type=float, default=0.00005)
     parser.add_argument('--l2', type=float, default=0.0001)
 
@@ -70,8 +73,8 @@ if __name__ == '__main__':
                         help='Existing log file to append to, instead of creating a new one (resume mid-sweep).')
 
     args = parser.parse_args()
+    lambda_protos = [float(x) for x in args.lambda_protos.split(',')]
     lambda_rels = [float(x) for x in args.lambda_rels.split(',')]
-    lambda_probs = [float(x) for x in args.lambda_probs.split(',')]
     seeds = [int(x) for x in args.seeds.split(',')]
 
     args.dataset = 'MELD'
@@ -84,7 +87,7 @@ if __name__ == '__main__':
     args.device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     cuda = torch.cuda.is_available() and not args.no_cuda
 
-    n_combos = len(lambda_rels) * len(lambda_probs)
+    n_combos = len(lambda_protos) * len(lambda_rels)
 
     if args.append_to:
         result_path = args.append_to
@@ -93,7 +96,7 @@ if __name__ == '__main__':
         out_dir = os.path.join(path.SAVED_ROOT, 'tune')
         os.makedirs(out_dir, exist_ok=True)
         time_now = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M_%S')
-        result_path = os.path.join(out_dir, f'{time_now}_lambda_prob_rel_sweep_meld.txt')
+        result_path = os.path.join(out_dir, f'{time_now}_lambda_proto_rel_sweep_meld.txt')
 
     def log(msg):
         print(msg)
@@ -103,11 +106,11 @@ if __name__ == '__main__':
     if args.skip_combos:
         log(f'\n===== RESUMING from combo {args.skip_combos + 1}/{n_combos} (skipping first {args.skip_combos}) =====')
     else:
-        log(f'lambda_rel (lambda1) x lambda_prob (lambda2) tune (student, MELD genuine '
+        log(f'lambda_proto (lambda1) x lambda_rel (lambda2) tune (student, MELD genuine '
             f'train/valid/test split, best=valid F1, test F1 reported at best-val checkpoint) — '
             f'mask_rate={args.mask_rate}  prompt_type={args.prompt_type}')
-        log(f'lambda_rels={lambda_rels}  lambda_probs={lambda_probs}  ({n_combos} combos)  '
-            f'lambda_proto(fixed)={args.lambda_proto}  training_seeds={seeds}  '
+        log(f'lambda_protos={lambda_protos}  lambda_rels={lambda_rels}  ({n_combos} combos)  '
+            f'lambda_prob(fixed)={args.lambda_prob}  training_seeds={seeds}  '
             f'lr={args.lr}  l2={args.l2}  optimizer={args.optimizer}  roberta_idx={args.roberta_idx}  '
             f'epochs_cap={args.epochs}  early_stop_patience={args.early_stop_patience}')
         log('-' * 100)
@@ -138,8 +141,8 @@ if __name__ == '__main__':
     results = []
     combo_idx = 0
 
-    for l1 in lambda_rels:          # lambda1 = lambda_rel
-        for l2 in lambda_probs:     # lambda2 = lambda_prob
+    for l1 in lambda_protos:        # lambda1 = lambda_proto
+        for l2 in lambda_rels:      # lambda2 = lambda_rel
             combo_idx += 1
             if combo_idx <= args.skip_combos:
                 continue
@@ -147,10 +150,10 @@ if __name__ == '__main__':
                 log(f'\n===== STOPPING after {args.max_combos} combos this run '
                     f'(resume with --skip-combos {combo_idx - 1}) =====')
                 break
-            log(f'\n[{combo_idx}/{n_combos}] lambda_rel(l1)={l1} lambda_prob(l2)={l2}')
+            log(f'\n[{combo_idx}/{n_combos}] lambda_proto(l1)={l1} lambda_rel(l2)={l2}')
 
-            args.lambda_rel = l1
-            args.lambda_prob = l2
+            args.lambda_proto = l1
+            args.lambda_rel = l2
             seed_val, seed_test = [], []
             combo_start = time.time()
 
@@ -202,7 +205,7 @@ if __name__ == '__main__':
             mean_test, std_test = float(np.mean(seed_test)), float(np.std(seed_test))
             duration = time.time() - combo_start
 
-            log(f'>>>>> lambda_rel={l1} lambda_prob={l2}: val_f1 mean={mean_val:.4f} std={std_val:.4f} | '
+            log(f'>>>>> lambda_proto={l1} lambda_rel={l2}: val_f1 mean={mean_val:.4f} std={std_val:.4f} | '
                 f'test_f1 mean={mean_test:.4f} std={std_test:.4f} | duration={duration:.1f}s >>>>>')
 
             results.append((l1, l2, mean_val, std_val, mean_test, std_test, duration))
@@ -212,7 +215,7 @@ if __name__ == '__main__':
 
     log('\n===== SUMMARY (sorted by mean val_f1, best first) =====')
     for l1, l2, mean_val, std_val, mean_test, std_test, duration in sorted(results, key=lambda r: -r[2]):
-        log(f'lambda_rel={l1:<5} lambda_prob={l2:<5}  val_f1={mean_val:.4f}±{std_val:.4f}  '
+        log(f'lambda_proto={l1:<5} lambda_rel={l2:<5}  val_f1={mean_val:.4f}±{std_val:.4f}  '
             f'test_f1={mean_test:.4f}±{std_test:.4f}  duration={duration:.1f}s')
 
     log(f'\nFull log written to: {result_path}')

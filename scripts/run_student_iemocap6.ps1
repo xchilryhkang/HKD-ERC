@@ -3,9 +3,9 @@
 param(
     [double]$MaskRate = 0.1,
     [string]$PromptType = "none",
-    [double]$LambdaProb = 0.4,
+    [double]$LambdaProb = 1.0,
     [double]$LambdaProto = 1.0,
-    [double]$LambdaRel = 0.6,
+    [double]$LambdaRel = 1.0,
     [double]$Lr = 0.0002,
     [double]$L2 = 0.00001,
     [string]$Optimizer = 'adamw',

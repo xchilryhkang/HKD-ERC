@@ -95,7 +95,7 @@ script implements the right one for it):
 ├── tune/                           # hyperparameter sweeps, one per (hyperparam, dataset)
 │   ├── tune_lr_l2_iemocap.py       tune_lr_l2_meld.py
 │   ├── tune_window_iemocap.py      tune_window_meld.py
-│   ├── tune_lambda_prob_rel_iemocap.py   tune_lambda_prob_rel_meld.py
+│   ├── tune_lambda_proto_rel_iemocap.py   tune_lambda_proto_rel_meld.py
 │   └── tune_dropout_meld.py        tune_heads_meld.py   tune_hidden_dim_meld.py
 │
 ├── analysis/
@@ -244,7 +244,7 @@ Long sweeps support `--max-combos` / `--skip-combos` / `--append-to` so they can
 across sessions. Example:
 
 ```bash
-python tune/tune_lambda_prob_rel_iemocap.py --mask-rate 0.3
+python tune/tune_lambda_proto_rel_iemocap.py --mask-rate 0.3
 python analysis/plot_lambda_sweep_3d.py --log output/tune/<sweep file>.txt
 ```
 

@@ -3,9 +3,9 @@
 param(
     [double]$MaskRate = 0.1,
     [string]$PromptType = "none",
-    [double]$LambdaProb = 0.4,
+    [double]$LambdaProb = 1.0,
     [double]$LambdaProto = 1.0,
-    [double]$LambdaRel = 0.8,
+    [double]$LambdaRel = 1.0,
     [double]$Lr = 0.00005,
     [double]$L2 = 0.0001,
     [int]$Seed = 50,
