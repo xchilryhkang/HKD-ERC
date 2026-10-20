@@ -23,7 +23,8 @@ from src.losses.loss import MaskedCELoss
 from src.losses.kd_losses import (
     MaskedKLLoss, PrototypeRelationLoss, SinkhornOTLoss, compute_ot_cost_matrix, NodeRelationLoss
 )
-from train.train_student import compute_teacher_prototypes, train_or_eval_student
+from train.train_student import (compute_teacher_prototypes, train_or_eval_student,
+                                 calibrate_loss_scales)
 
 
 if __name__ == '__main__':
@@ -87,6 +88,9 @@ if __name__ == '__main__':
     parser.add_argument('--early-stop-delta', type=float, default=0.001)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--seed', type=int, default=50)
+    parser.add_argument('--loss-norm', type=str, default='none', choices=['none', 'calibrated'],
+                        help="'calibrated' rescales proto/rel to CE's scale once per run, so their "
+                             'lambdas are meaningful in [0, 1] (see train_student.calibrate_loss_scales).')
     parser.add_argument('--class-weight', type=str, default='none',
                         choices=['none', 'inverse', 'inverse-sqrt'],
                         help='Re-weight CE by inverse class frequency of the TRAIN split '
@@ -163,6 +167,14 @@ if __name__ == '__main__':
     node_rel_loss = NodeRelationLoss()
     if cuda:
         cls_loss.cuda()
+
+
+    args.proto_scale, args.rel_scale = 1.0, 1.0
+    if args.loss_norm == 'calibrated':
+        args.proto_scale, args.rel_scale = calibrate_loss_scales(
+            args, teacher, student, cls_loss, kl_loss, proto_loss, proto_t, proto_t_e,
+            ot_loss, ot_cost, node_rel_loss, train_loader, mask_rate=mask_rate)
+        print(f'  loss-norm calibrated: proto x{args.proto_scale:.0f}, rel x{args.rel_scale:.0f}')
 
     optimizer = make_optimizer(student.parameters(), args)
 

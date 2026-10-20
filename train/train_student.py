@@ -108,6 +108,43 @@ def compute_teacher_prototypes(args, teacher, dataloader, adim, tdim, vdim):
     return sums / denom, sums_e / denom                                 # [n_classes, D], [n_classes, hidden_dim]
 
 
+def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
+    """
+    Measure how large proto and rel actually are next to CE, so that a lambda
+    of 1 means "weigh this cluster like CE" instead of "weigh it at a fraction
+    of a percent". Returns (proto_scale, rel_scale).
+
+    The ratios are dataset-dependent (CE/proto is ~270 on MELD but ~90 on
+    IEMOCAP), which is why they are measured per run rather than hardcoded.
+
+    Call this ONCE per run and reuse the result for every lambda: scales that
+    moved between settings would make the same lambda mean different things
+    in different cells of a sweep.
+    """
+    # Only the raw per-cluster averages are read, so neutralise the weights
+    # (and tolerate a caller that has not set them yet), then put back
+    # whatever was there -- including the RNG, which the loader consumes.
+    saved = {k: getattr(args, k, None)
+             for k in ('lambda_proto', 'lambda_rel', 'proto_scale', 'rel_scale')}
+    for k in saved:
+        setattr(args, k, 1.0)
+    np_state, torch_state = np.random.get_state(), torch.random.get_rng_state()
+
+    _, _, _, ce, _, proto, _, e_proto, node_rel = train_or_eval_student(
+        args, *fwd_args, optimizer=None, train=False, **fwd_kwargs)
+
+    np.random.set_state(np_state)
+    torch.random.set_rng_state(torch_state)
+    for k, v in saved.items():
+        if v is None:
+            delattr(args, k)
+        else:
+            setattr(args, k, v)
+
+    rel = e_proto + node_rel
+    return ce / max(proto, 1e-8), ce / max(rel, 1e-8)
+
+
 def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss, proto_t, proto_t_e,
                            ot_loss, ot_cost, node_rel_loss, dataloader, mask_rate, optimizer=None, train=False):
     preds, labels, masks = [], [], []
@@ -224,11 +261,13 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         loss_ot = ot_loss(P, Q, ot_cost)
 
         # 4 clusters: CE (always weight 1), prob = KD+OT, proto, rel =
-        # e_proto+node_rel. proto/rel are cosine-based and run 10-100x
-        # smaller than CE/prob, so their lambdas may need to exceed 1.
+        # e_proto+node_rel. proto/rel are cosine-based and run far smaller
+        # than CE (~270x and ~85x on MELD, ~90x and ~45x on IEMOCAP), so
+        # --loss-norm calibrated rescales them to CE's scale first and lets
+        # the lambdas stay in [0, 1]. Scales are 1.0 when norm is off.
         loss = (loss_ce + args.lambda_prob * (loss_kd + loss_ot)
-                + args.lambda_proto * loss_proto
-                + args.lambda_rel * (loss_e_proto + loss_node_rel))
+                + args.lambda_proto * getattr(args, 'proto_scale', 1.0) * loss_proto
+                + args.lambda_rel * getattr(args, 'rel_scale', 1.0) * (loss_e_proto + loss_node_rel))
 
         preds.append(lp_.data.cpu().numpy())
         labels.append(labels_.data.cpu().numpy())

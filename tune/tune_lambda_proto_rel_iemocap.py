@@ -19,19 +19,23 @@ from src.losses.loss import MaskedCELoss
 from src.losses.kd_losses import (
     MaskedKLLoss, PrototypeRelationLoss, SinkhornOTLoss, compute_ot_cost_matrix, NodeRelationLoss
 )
-from train.train_student import compute_teacher_prototypes, train_or_eval_student
+from train.train_student import (compute_teacher_prototypes, train_or_eval_student,
+                                 calibrate_loss_scales)
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--lambda-protos', type=str, default='1,10,50,100,200',
+    parser.add_argument('--lambda-protos', type=str, default='0.2,0.4,0.6,0.8,1.0',
                         help='lambda_proto candidates (lambda1 in the 3D plot). proto runs ~0.004x CE, '
-                             'so these map to roughly 0.2%%/2%%/10%%/19%%/32%% of total loss.')
-    parser.add_argument('--lambda-rels', type=str, default='1,5,25,50,100',
+                             'so this grid spans only ~0.05%% to ~0.23%% of total loss.')
+    parser.add_argument('--lambda-rels', type=str, default='0.2,0.4,0.6,0.8,1.0',
                         help='lambda_rel candidates (lambda2 in the 3D plot). rel runs ~0.012x CE, '
-                             'so these map to roughly 0.7%%/4%%/16%%/27%%/43%% of total loss.')
+                             'so this grid spans only ~0.15%% to ~0.74%% of total loss.')
+    parser.add_argument('--loss-norm', type=str, default='none', choices=['none', 'calibrated'],
+                        help="'calibrated' rescales proto/rel to CE's scale once, so their lambdas "
+                             'are meaningful in [0, 1] (see train_student.calibrate_loss_scales).')
     parser.add_argument('--lambda-prob', type=float, default=1.0,
                         help='Held fixed at 1: prob is already CE-scale (~0.63x), so it needs no rebalancing.')
     parser.add_argument('--seeds', type=str, default='50', help='Comma-separated training seeds.')
@@ -149,6 +153,26 @@ if __name__ == '__main__':
         protos_t_e.append(proto_t_e)
         ot_costs.append(ot_cost)
         print(f'  fold {ii}: proto_t={tuple(proto_t.shape)}, proto_t_e={tuple(proto_t_e.shape)}')
+
+    # Calibrated ONCE (on fold 0) and shared by every combo and fold: a scale
+    # that moved between cells would make the same lambda mean different
+    # things across the sweep.
+    args.proto_scale, args.rel_scale = 1.0, 1.0
+    if args.loss_norm == 'calibrated':
+        set_seed(seeds[0], cuda)
+        _cal = build_model(args, adim, tdim, vdim)
+        if cuda:
+            _cal.cuda()
+        _cls = MaskedCELoss()
+        if cuda:
+            _cls.cuda()
+        args.proto_scale, args.rel_scale = calibrate_loss_scales(
+            args, teachers[0], _cal, _cls, MaskedKLLoss(temperature=args.kd_temperature),
+            PrototypeRelationLoss(), protos_t[0], protos_t_e[0],
+            SinkhornOTLoss(epsilon=args.ot_epsilon, n_iters=args.ot_iters), ot_costs[0],
+            NodeRelationLoss(), train_loaders[0], mask_rate=args.mask_rate)
+        del _cal
+        log(f'loss-norm calibrated: proto x{args.proto_scale:.0f}, rel x{args.rel_scale:.0f}')
 
     results = []
     combo_idx = 0
