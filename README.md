@@ -333,6 +333,23 @@ prototype is one polarity, and both well supported (613 and 218; MOSI at 6 would
 to 67). The student prints the per-bin support every run plus a warning when the
 smallest bin falls under 100.
 
+`--loss-norm calibrated` on CMU rescales **prob as well as** proto and rel, which the
+ERC scripts do not. There, prob already runs at ~0.63x CE and needs no rebalancing;
+here it is MSE against the teacher's scalar while the CE slot is MSE against the gold
+score, and the two sit far apart (0.039x on MOSI, 0.167x on MOSEI). Calibrating only
+proto and rel left prob the smallest of the four clusters — 2% of the loss on MOSI
+and 7% on MOSEI, against ~30% each for proto and rel — which inverts what the weights
+are for. With prob included, all four start between 16% and 34%.
+
+Two caveats on calibration here. The reference is the MSE slot, whose magnitude
+carries the label scale: rescaling the labels to [-1, 1] would divide every scale
+factor by 9, where CE (in nats) has no such arbitrary unit. And the scales are an
+order of magnitude larger than on the ERC datasets (MOSI proto x11580, rel x386;
+MOSEI x847, x98; against MELD x113/x31 and IEMOCAP x25/x13), so the drift the ERC
+runs tolerate is amplified — proto went from 31% of the loss on train to 57% on valid
+within one epoch on MOSI. Treat it as bounding the terms into a sane range, not as
+pinning them to the MSE slot throughout.
+
 `lr`/`l2` are carried over from MELD and have **not** been tuned on CMU yet.
 
 Key student flags: `--mask-type constant-<rate>` (missing-modality rate at train+eval

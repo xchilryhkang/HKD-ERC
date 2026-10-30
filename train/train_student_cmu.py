@@ -92,8 +92,11 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--seed', type=int, default=50)
     parser.add_argument('--loss-norm', type=str, default='none', choices=['none', 'calibrated'],
-                        help="'calibrated' rescales proto/rel to the CE-slot scale once per run "
-                             '(see train_student.calibrate_loss_scales).')
+                        help="'calibrated' rescales prob, proto and rel to the MSE-slot scale "
+                             'once per run, so their lambdas are meaningful in [0, 1]. Unlike '
+                             'the ERC scripts this covers prob too, which here is MSE against '
+                             'the teacher scalar and runs at 0.039x (MOSI) to 0.167x (MOSEI) of '
+                             'the gold MSE. See train_student.calibrate_loss_scales.')
     parser.add_argument('--optimizer', type=str, default='adamw', choices=['adam', 'adamw'])
 
     args = parser.parse_args()
@@ -175,12 +178,15 @@ if __name__ == '__main__':
     if cuda:
         cls_loss.cuda()
 
-    args.proto_scale, args.rel_scale = 1.0, 1.0
+    args.prob_scale, args.proto_scale, args.rel_scale = 1.0, 1.0, 1.0
     if args.loss_norm == 'calibrated':
-        args.proto_scale, args.rel_scale = calibrate_loss_scales(
+        # with_prob: unlike the ERC datasets, prob here is not already
+        # CE-scale (see train_student.calibrate_loss_scales).
+        args.prob_scale, args.proto_scale, args.rel_scale = calibrate_loss_scales(
             args, teacher, student, cls_loss, None, proto_loss, proto_t, proto_t_e,
-            None, None, node_rel_loss, train_loader, mask_rate=mask_rate)
-        print(f'  loss-norm calibrated: proto x{args.proto_scale:.0f}, rel x{args.rel_scale:.0f}')
+            None, None, node_rel_loss, train_loader, mask_rate=mask_rate, with_prob=True)
+        print(f'  loss-norm calibrated: prob x{args.prob_scale:.0f}, '
+              f'proto x{args.proto_scale:.0f}, rel x{args.rel_scale:.0f}')
 
     optimizer = make_optimizer(student.parameters(), args)
 

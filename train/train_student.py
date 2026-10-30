@@ -128,11 +128,21 @@ def compute_teacher_prototypes(args, teacher, dataloader, adim, tdim, vdim):
     return sums / denom, sums_e / denom                                 # [n_proto_cls, D], [n_proto_cls, hidden_dim]
 
 
-def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
+def calibrate_loss_scales(args, *fwd_args, with_prob=False, **fwd_kwargs):
     """
     Measure how large proto and rel actually are next to CE, so that a lambda
     of 1 means "weigh this cluster like CE" instead of "weigh it at a fraction
-    of a percent". Returns (proto_scale, rel_scale).
+    of a percent". Returns (proto_scale, rel_scale), or
+    (prob_scale, proto_scale, rel_scale) when with_prob is set.
+
+    with_prob exists for the CMU datasets. There, prob is MSE between the
+    student and teacher scalars while CE is MSE against the gold score, and
+    the two are far apart -- measured at 0.039x on MOSI and 0.167x on MOSEI,
+    against prob's 0.63x CE on the ERC datasets, where it needs no
+    rebalancing. Calibrating proto and rel but not prob would leave prob the
+    smallest cluster of the four (0-7% of the total, against ~30% each for
+    proto and rel), which inverts what the weights are for. The ERC scripts
+    leave it off so the lambdas in their finished sweeps keep their meaning.
 
     The ratios are dataset-dependent (CE/proto is ~270 on MELD but ~90 on
     IEMOCAP), which is why they are measured per run rather than hardcoded.
@@ -145,12 +155,13 @@ def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
     # (and tolerate a caller that has not set them yet), then put back
     # whatever was there -- including the RNG, which the loader consumes.
     saved = {k: getattr(args, k, None)
-             for k in ('lambda_proto', 'lambda_rel', 'proto_scale', 'rel_scale')}
+             for k in ('lambda_prob', 'lambda_proto', 'lambda_rel',
+                       'prob_scale', 'proto_scale', 'rel_scale')}
     for k in saved:
         setattr(args, k, 1.0)
     np_state, torch_state = np.random.get_state(), torch.random.get_rng_state()
 
-    _, _, _, ce, _, proto, _, e_proto, node_rel = train_or_eval_student(
+    _, _, _, ce, kd, proto, ot, e_proto, node_rel = train_or_eval_student(
         args, *fwd_args, optimizer=None, train=False, **fwd_kwargs)
 
     np.random.set_state(np_state)
@@ -162,7 +173,10 @@ def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
             setattr(args, k, v)
 
     rel = e_proto + node_rel
-    return ce / max(proto, 1e-8), ce / max(rel, 1e-8)
+    proto_scale, rel_scale = ce / max(proto, 1e-8), ce / max(rel, 1e-8)
+    if with_prob:
+        return ce / max(kd + ot, 1e-8), proto_scale, rel_scale
+    return proto_scale, rel_scale
 
 
 def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss, proto_t, proto_t_e,
@@ -308,7 +322,8 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         # than CE (~270x and ~85x on MELD, ~90x and ~45x on IEMOCAP), so
         # --loss-norm calibrated rescales them to CE's scale first and lets
         # the lambdas stay in [0, 1]. Scales are 1.0 when norm is off.
-        loss = (loss_ce + args.lambda_prob * (loss_kd + loss_ot)
+        loss = (loss_ce
+                + args.lambda_prob * getattr(args, 'prob_scale', 1.0) * (loss_kd + loss_ot)
                 + args.lambda_proto * getattr(args, 'proto_scale', 1.0) * loss_proto
                 + args.lambda_rel * getattr(args, 'rel_scale', 1.0) * (loss_e_proto + loss_node_rel))
 
