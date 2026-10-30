@@ -76,6 +76,7 @@ class HypergraphERCModel(nn.Module):
         self.hypergraph = HypergraphStack(self.d_e, n_layers=hg_layers)
 
 
+        self.n_classes = n_classes
         self.classifier = nn.Linear(4 * self.d_e, n_classes)
 
     def forward(self, inputfeats, qmask, umask, seq_lengths, input_features_mask, adim, tdim, vdim, label=None):
@@ -155,6 +156,12 @@ class HypergraphERCModel(nn.Module):
             [h_final['a'], h_final['t'], h_final['v'], h_final['e']], dim=-1
         )  # [T, B, 4 * d_e]
         logits = self.classifier(concat_features)
-        log_prob = F.log_softmax(logits, dim=-1)
+        if self.n_classes == 1:
+            # Sentiment regression (CMU-MOSI/MOSEI): log_softmax over a
+            # single logit is identically 0, which would kill the gradient,
+            # so the raw scalar is returned and MaskedMSELoss consumes it.
+            out = logits
+        else:
+            out = F.log_softmax(logits, dim=-1)
 
-        return log_prob, v_hat, gamma_vue, h_final, gammas_hg
+        return out, v_hat, gamma_vue, h_final, gammas_hg

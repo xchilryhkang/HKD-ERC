@@ -8,16 +8,22 @@ DATASET_ROOT = os.path.join(BASE, 'dataset')
 DATA_DIR_Win = {
 	'IEMOCAPFour': os.path.join(DATASET_ROOT, 'IEMOCAPFour'),
 	'IEMOCAPSix': os.path.join(DATASET_ROOT, 'IEMOCAP'),
+	'CMUMOSI': os.path.join(DATASET_ROOT, 'CMUMOSI'),
+	'CMUMOSEI': os.path.join(DATASET_ROOT, 'CMUMOSEI'),
 }
 
 PATH_TO_FEATURES_Win = {
 	'IEMOCAPFour': os.path.join(DATA_DIR_Win['IEMOCAPFour'], 'features'),
 	'IEMOCAPSix': os.path.join(DATA_DIR_Win['IEMOCAPSix'], 'features'),
+	'CMUMOSI': os.path.join(DATA_DIR_Win['CMUMOSI'], 'features'),
+	'CMUMOSEI': os.path.join(DATA_DIR_Win['CMUMOSEI'], 'features'),
 }
 
 PATH_TO_LABEL_Win = {
 	'IEMOCAPSix': os.path.join(DATA_DIR_Win['IEMOCAPSix'], 'IEMOCAP_features_raw_6way.pkl'),
 	'IEMOCAPFour': os.path.join(DATA_DIR_Win['IEMOCAPFour'], 'IEMOCAP_features_raw_4way.pkl'),
+	'CMUMOSI': os.path.join(DATA_DIR_Win['CMUMOSI'], 'CMUMOSI_features_raw_2way.pkl'),
+	'CMUMOSEI': os.path.join(DATA_DIR_Win['CMUMOSEI'], 'CMUMOSEI_features_raw_2way.pkl'),
 }
 
 # Self-contained: text, audio, visual, labels and the official split all

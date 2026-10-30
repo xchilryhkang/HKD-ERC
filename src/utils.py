@@ -10,7 +10,7 @@ from numpy.random import randint
 import pandas as pd
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from sklearn.preprocessing import OneHotEncoder
@@ -19,11 +19,12 @@ from src import path
 from src.models.model import HypergraphERCModel
 from src.data.dataloader_iemocap import IEMOCAPDataset
 from src.data.dataloader_meld import MELDRobertaDataset
+from src.data.dataloader_cmu import CMUDataset
 
 import sys
 import copy
 
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -226,6 +227,156 @@ def get_loaders_meld(features_path, batch_size, num_workers=0, roberta_idx=1):
     adim, tdim, vdim = train_dataset.adim, train_dataset.tdim, train_dataset.vdim
 
     return [train_loader], [val_loader], [test_loader], adim, tdim, vdim
+
+
+def get_loaders_cmu(dataset, batch_size, audio_root, text_root, video_root, num_workers=0):
+    """
+    CMU-MOSI / CMU-MOSEI official train/valid/test split. One CMUDataset holds
+    every video; the three loaders are Subsets over the index ranges that
+    CMUDataset.vids was built in (train, then valid, then test). Returns
+    single-element lists so callers index [0] as they do for MELD.
+    """
+    ds = CMUDataset(
+        label_path=path.PATH_TO_LABEL_Win[dataset],
+        audio_root=audio_root,
+        text_root=text_root,
+        video_root=video_root,
+    )
+
+    n_tr, n_va = len(ds.trainVids), len(ds.valVids)
+    idx_train = list(range(n_tr))
+    idx_val = list(range(n_tr, n_tr + n_va))
+    idx_test = list(range(n_tr + n_va, len(ds.vids)))
+    assert [ds.vids[i] for i in idx_test] == ds.testVids, 'split index mismatch'
+
+    def loader(idxs, shuffle):
+        return DataLoader(
+            Subset(ds, idxs), batch_size=batch_size, shuffle=shuffle,
+            collate_fn=ds.collate_fn, num_workers=num_workers, pin_memory=False)
+
+    print(f'{dataset}: {n_tr} train / {n_va} valid / {len(idx_test)} test videos')
+
+    adim, tdim, vdim = ds.get_featDim()
+    return ([loader(idx_train, True)], [loader(idx_val, False)],
+            [loader(idx_test, False)], adim, tdim, vdim)
+
+
+PROTO_BIN_CHOICES = (2, 3, 4, 5, 6, 7)
+ROUND_BIN_CHOICES = (2, 3, 5, 7)
+PROTO_BIN_MODES = ('uniform', 'round')
+
+
+def bin_sentiment(scores, n_bins, mode='uniform'):
+    """
+    Map continuous sentiment in [-3, 3] onto n_bins pseudo-classes, so the
+    prototype and rel distillation clusters have discrete classes to work
+    with on the CMU datasets.
+
+    `mode` picks how the range is cut:
+
+      'uniform'  n_bins equal segments of width 6/n_bins, left-closed, so a
+                 score sitting exactly on an edge goes to the upper bin.
+      'round'    round(score) (or round(score*2/3) at 5, sign at 3), i.e. the
+                 binning behind the Acc-7/Acc-5 numbers these datasets are
+                 reported under. Only defined for ROUND_BIN_CHOICES, since it
+                 always centres a bin on 0 and so cannot produce an even
+                 count. Clipping at +-3 also leaves its two extreme bins half
+                 the width of the interior ones, which starves them: on
+                 MOSI's 1284 train utterances the smallest bin holds 24 at
+                 n_bins=7 under 'round' but 67 under 'uniform', and even
+                 'round' at 3 bins only reaches 53. 'uniform' is the default
+                 because this binning is an internal distillation detail, not
+                 a reported metric, so there is nothing to gain from
+                 inheriting that convention's starved tails.
+
+    Whether 0 is an edge or a bin centre follows from the parity of n_bins,
+    and that decides what happens to the exact zeros:
+
+      even n_bins  0 is an edge (2 -> [-3,0),[0,3); 6 -> integer edges), so no
+                   bin can hold both signs. Left-closed bins would then sweep
+                   every exact zero into the first positive bin -- 47% of it
+                   on MOSEI at 6 bins -- so the zeros are dropped instead,
+                   leaving each prototype to a single polarity. This is what
+                   n_bins=2 has always done, and it costs no support: MOSEI's
+                   smallest bin at 6 is 613 either way.
+      odd n_bins   0 sits at the centre of the middle bin, which therefore
+                   mixes negative and positive scores (6789 utterances on
+                   MOSEI at 7 bins). Nothing is dropped, since zero belongs
+                   in that bin as much as any neighbouring value.
+
+    Each prototype is a mean over its bin, so a thin bin gives a noisy
+    target -- check the per-bin counts the student prints before trusting a
+    large n_bins on a small train split.
+
+    Returns (bin_index [long], keep [bool]) over the same positions as
+    `scores`.
+    """
+    if n_bins not in PROTO_BIN_CHOICES:
+        raise ValueError(f'n_bins must be one of {PROTO_BIN_CHOICES}, got {n_bins}')
+    if mode not in PROTO_BIN_MODES:
+        raise ValueError(f'mode must be one of {PROTO_BIN_MODES}, got {mode!r}')
+    if mode == 'round' and n_bins not in ROUND_BIN_CHOICES:
+        raise ValueError(
+            f"mode='round' centres a bin on 0 and so only supports "
+            f'{ROUND_BIN_CHOICES}, got {n_bins}; use mode=\'uniform\' for an even count')
+
+    if n_bins == 2:
+        return (scores > 0).long(), scores != 0
+
+    if mode == 'uniform':
+        # Bin i is [-3 + 6i/n_bins, -3 + 6(i+1)/n_bins), left-closed, so a
+        # score sitting exactly on an edge belongs to the upper bin. Getting
+        # that right needs the tolerance: labels are stored as float32, and
+        # e.g. 1.8 -- an exact edge at n_bins=5 -- is held as 1.7999999523,
+        # just under it. Without the snap, 13.5% of MOSI's train split lands
+        # in a bin decided by float rounding rather than by its value, and
+        # the assignment flips with the dtype. 1e-6 is ~50000x smaller than
+        # the smallest gap between distinct labels (0.05 on MOSI, 1/3 on
+        # MOSEI), so it can never merge two genuinely different scores.
+        u = (scores.double() + 3.0) * n_bins / 6.0
+        idx = torch.clamp(torch.floor(u + 1e-6).long(), 0, n_bins - 1)
+        if n_bins % 2 == 0:
+            return idx, scores != 0
+        return idx, torch.ones_like(scores, dtype=torch.bool)
+    elif n_bins == 3:
+        idx = torch.sign(scores).long() + 1
+    elif n_bins == 5:
+        idx = torch.clamp(torch.round(scores * 2.0 / 3.0), -2, 2).long() + 2
+    else:
+        idx = torch.clamp(torch.round(scores), -3, 3).long() + 3
+
+    return idx, torch.ones_like(scores, dtype=torch.bool)
+
+
+def regression_metrics(labels, preds, masks):
+    """
+    Scoring for the CMU sentiment datasets, following the convention their
+    papers report (and the CPD-GNN reference implementation): utterances whose
+    gold score is exactly 0 are dropped, and the sign of the remaining scores
+    gives the binary negative/positive class.
+
+    Dropping zeros is not cosmetic -- it removes 4.4% of MOSI and 21.9% of
+    MOSEI -- so acc/F1 here are not comparable to numbers computed any other
+    way. MAE and Pearson r are reported over every valid utterance, zeros
+    included, since they need no binarisation.
+
+    Returns (acc, f1, mae, corr).
+    """
+    labels = np.asarray(labels).reshape(-1)
+    preds = np.asarray(preds).reshape(-1)
+    valid = np.asarray(masks).reshape(-1) == 1
+
+    y, p = labels[valid], preds[valid]
+    mae = float(np.mean(np.abs(y - p))) if y.size else float('nan')
+    corr = float(np.corrcoef(y, p)[0, 1]) if y.size > 1 and p.std() > 0 else float('nan')
+
+    nz = y != 0
+    if nz.sum() == 0:
+        return float('nan'), float('nan'), mae, corr
+    y_bin, p_bin = (y[nz] > 0).astype(int), (p[nz] > 0).astype(int)
+    acc = accuracy_score(y_bin, p_bin)
+    f1 = f1_score(y_bin, p_bin, average='weighted')
+    return acc, f1, mae, corr
 
 
 def compute_class_weights(loader, n_classes, scheme='inverse'):

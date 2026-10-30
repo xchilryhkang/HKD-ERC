@@ -35,3 +35,21 @@ class MaskedCELoss(nn.Module):
             denom = (w[target_flat] * umask.squeeze()).sum()
 
         return total / denom.clamp(min=1e-8)
+
+
+class MaskedMSELoss(nn.Module):
+    """
+    MSE over valid (non-padded) utterances, for the CMU sentiment-regression
+    datasets where the head emits one scalar instead of class logits.
+
+    Also used as the student's prob-cluster term on those datasets: KL and
+    Sinkhorn OT both need a distribution over classes, which a 1-wide head
+    cannot give (see train_student.train_or_eval_student).
+    """
+
+    def forward(self, pred, target, umask):
+        pred = pred.reshape(-1)
+        target = target.reshape(-1).to(pred.dtype)
+        umask = umask.reshape(-1).to(pred.dtype)
+        total = (((pred - target) ** 2) * umask).sum()
+        return total / umask.sum().clamp(min=1e-8)

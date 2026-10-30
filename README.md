@@ -53,8 +53,8 @@ raw feature -> proj -> prompt -> BiLSTM -> ContextGraphStack (per modality: a / 
 
 ## Datasets
 
-Two datasets, two different evaluation protocols (a dataset's `train_*_<name>.py`
-script implements the right one for it):
+Three dataset families, each with its own evaluation protocol (a dataset's
+`train_*_<name>.py` script implements the right one for it):
 
 - **IEMOCAP** (4-class or 6-class): 5-fold **leave-one-session-out cross-validation**.
   There is no separate validation session — early stopping tracks the held-out
@@ -62,6 +62,27 @@ script implements the right one for it):
   `sessionout_f1`.
 - **MELD** (7-class): a genuine train(1038)/valid(114)/test(280) split. Early stopping
   tracks the real valid F1; test F1 is reported at the best-valid checkpoint.
+- **CMU-MOSI / CMU-MOSEI**: **sentiment regression**, not classification, on the
+  official train/valid/test split (MOSI 52/10/31 videos = 1284/229/686 utterances;
+  MOSEI 2249/300/676 = 16326/1871/4659). Three things differ from the ERC datasets,
+  and all are handled in the data/train layer rather than the model:
+  - Labels are continuous scores in [-3, 3], so the head emits **one scalar**
+    (`n_classes=1`) trained with `MaskedMSELoss`. `model.py` skips `log_softmax` at
+    that width, since over a single logit it is identically 0 and would kill the
+    gradient.
+  - Accuracy and weighted F1 follow the convention these datasets are reported
+    under: utterances whose gold score is exactly **0 are dropped**, and the sign of
+    the rest gives negative/positive. That removes 4.4% of MOSI and 21.9% of MOSEI,
+    so the numbers are not comparable to any other binarisation. MAE and Pearson r
+    are also reported, over every valid utterance including the zeros.
+  - The distillation clusters that are per-class need discrete labels, so the score
+    is binned (`--proto-bins`, see below); the prob cluster becomes student-vs-teacher
+    MSE and Sinkhorn OT drops out, since neither KL nor OT has a class distribution
+    to work with at a 1-wide head.
+  - They are **mono-speaker** (every speaker field is the empty string), so
+    `n_speakers=1`, the Guest half of each modality is zeros, and the speaker-aware
+    edge weight in `ContextGraphStack` is constant 1 — `theta_beta` gets no
+    gradient on these datasets.
 
 ## Project Structure
 
@@ -79,9 +100,10 @@ script implements the right one for it):
 │   │   └── graph.py                # batch_graphify: utterances -> graph edges
 │   ├── data/
 │   │   ├── dataloader_iemocap.py   # IEMOCAP dataset + loaders
-│   │   └── dataloader_meld.py      # MELD dataset + loaders
+│   │   ├── dataloader_meld.py      # MELD dataset + loaders
+│   │   └── dataloader_cmu.py       # CMU-MOSI/MOSEI dataset + loaders (regression)
 │   └── losses/
-│       ├── loss.py                 # MaskedCELoss
+│       ├── loss.py                 # MaskedCELoss, MaskedMSELoss
 │       └── kd_losses.py            # KD/OT/prototype/node-relation distillation losses
 │
 ├── train/                          # training entry points
@@ -90,7 +112,9 @@ script implements the right one for it):
 │   ├── train_teacher_iemocap.py    # teacher, IEMOCAP 5-fold leave-one-session-out CV
 │   ├── train_student_iemocap.py    # student, IEMOCAP 5-fold leave-one-session-out CV
 │   ├── train_teacher_meld.py       # teacher, MELD genuine train/valid/test split
-│   └── train_student_meld.py       # student, MELD genuine train/valid/test split
+│   ├── train_student_meld.py       # student, MELD genuine train/valid/test split
+│   ├── train_teacher_cmu.py        # teacher, CMU-MOSI/MOSEI sentiment regression
+│   └── train_student_cmu.py        # student, CMU-MOSI/MOSEI sentiment regression
 │
 ├── tune/                           # hyperparameter sweeps, one per (hyperparam, dataset)
 │   ├── tune_lr_l2_iemocap.py       tune_lr_l2_meld.py
@@ -104,6 +128,7 @@ script implements the right one for it):
 │
 ├── scripts/
 │   ├── prepare_iemocap.py          # pack IEMOCAP's loose .npy files into one pkl
+│   ├── prepare_cmu.py              # same, for CMU-MOSI / CMU-MOSEI
 │   ├── run_teacher_iemocap6.ps1 / .sh    run_student_iemocap6.ps1 / .sh
 │   ├── run_teacher_meld.ps1              run_student_meld.ps1
 │   └── run_pipeline_iemocap6.ps1   # full teacher -> student -> analysis pipeline
@@ -166,8 +191,14 @@ dataset/
 ├── IEMOCAPFour/                                # 4-class (IEMOCAPFour)
 │   ├── IEMOCAP_features_raw_4way.pkl
 │   └── features/...
-└── MELD/
-    └── meld_emotion_semantic_features_roberta.pkl   # everything: text + audio + visual + split
+├── MELD/
+│   └── meld_emotion_semantic_features_roberta.pkl   # everything: text + audio + visual + split
+├── CMUMOSI/
+│   ├── CMUMOSI_features_raw_2way.pkl           # labels, speakers, sentences, train/valid/test
+│   └── features/...                            # same three extractors as IEMOCAP
+└── CMUMOSEI/
+    ├── CMUMOSEI_features_raw_2way.pkl
+    └── features/...
 ```
 
 - **IEMOCAP** pre-processed features: see the **SDR-GNN** / **GCNet** repositories.
@@ -176,40 +207,54 @@ dataset/
   300d audio, 342d visual, speakers, labels, and MELD's official
   train(1038)/valid(114)/test(280) split. Audio/visual originate from the **MMGCN**
   features.
+- **CMU-MOSI / CMU-MOSEI**: the same `deberta-large-4-UTT` (1024d) /
+  `wav2vec-large-c-UTT` (512d) / `manet_UTT` (1024d) extractors as IEMOCAP, so no
+  dimension changes. The `_2way` in the pkl filename names the downstream task, not
+  the stored label: the file holds the raw continuous score. Two layout differences
+  from IEMOCAP, both handled by `dataloader_cmu.py`: `manet_UTT` is one flat `.npy`
+  per utterance (monologue, one face) instead of a per-utterance folder, and ids are
+  `<videoId>_<n>` with no zero padding, so features resolve by exact filename
+  instead of IEMOCAP's prefix glob — which would match `_1` against `_10`..`_13`
+  for 8.3% of MOSI and 5.0% of MOSEI ids.
 
 If your paths differ, edit `src/path.py` directly (it resolves everything relative to
 the repo root by default, so no absolute paths are hardcoded).
 
-### Packing IEMOCAP into one file
+### Packing the loose .npy datasets into one file
 
-IEMOCAP ships as ~30k loose `.npy` files, and scanning them takes around 9 minutes. Do
-it once, up front:
+IEMOCAP and the two CMU datasets ship as loose `.npy` files — ~30k, 6.6k and 68.6k
+respectively — and scanning them is slow. Do it once, up front:
 
 ```bash
 python scripts/prepare_iemocap.py --dataset IEMOCAPSix
+python scripts/prepare_cmu.py --dataset CMUMOSI
+python scripts/prepare_cmu.py --dataset CMUMOSEI
 ```
 
-That writes a single pkl under `dataset/IEMOCAP/cache/`, named after the label file and
+Each writes a single pkl under `dataset/<name>/cache/`, named after the label file and
 the three feature choices:
 
 ```
 IEMOCAP_features_raw_6way__wav2vec-large-c-UTT__deberta-large-4-UTT__manet_UTT.pkl
+CMUMOSI_features_raw_2way__wav2vec-large-c-UTT__deberta-large-4-UTT__manet_UTT.pkl
 ```
 
 The file is **self-contained**: once it exists, neither the label pkl nor the
-`features/` tree is read again, so it is the only IEMOCAP file needed to train. Training
-builds it on demand if it is missing, so this step is optional — it just means the cost
-lands in an explicit command rather than in your first training run.
+`features/` tree is read again, so it is the only file for that dataset needed to
+train. Training builds it on demand if it is missing, so this step is optional — it
+just means the cost lands in an explicit command rather than in your first training
+run. (MELD needs none of this: it already ships as one combined pkl.)
 
 Because the name encodes the feature choices, a different `--audio-feature` /
 `--text-feature` / `--video-feature` produces a different file instead of silently
 reusing a mismatched one.
 
 **Running elsewhere (Kaggle, Colab):** build it locally, then upload only that one
-~230MB file rather than ~30k loose ones. Keep it at `dataset/IEMOCAP/cache/<that exact
-name>` (point `DATASET_ROOT` in `src/path.py` at wherever the data is mounted) and pass
-the same feature flags it was built with. If anything is off, the loader says which
-files it wanted and could not find.
+file rather than the loose tree — ~230MB for IEMOCAP, 68MB for CMUMOSI, 704MB for
+CMUMOSEI. Keep it at `dataset/<name>/cache/<that exact name>` (point `DATASET_ROOT` in
+`src/path.py` at wherever the data is mounted) and pass the same feature flags it was
+built with. If anything is off, the loader says which files it wanted and could not
+find.
 
 ## How to Run
 
@@ -226,6 +271,69 @@ python train/train_student_iemocap.py --dataset IEMOCAPSix --mask-type constant-
 python train/train_teacher_meld.py
 python train/train_student_meld.py --mask-type constant-0.1 --prompt-type none
 ```
+
+### Teacher, then student (CMU-MOSI / CMU-MOSEI, sentiment regression)
+
+```bash
+python train/train_teacher_cmu.py --dataset CMUMOSI
+python train/train_student_cmu.py --dataset CMUMOSI --mask-type constant-0.1 --prompt-type none
+```
+
+`--lambda-prob` still scales the prob cluster, but on these datasets that cluster is
+MSE between the student and teacher scalars: KL and Sinkhorn OT both need a
+distribution over classes, which a 1-wide head cannot give, so OT drops out of the
+sum. `--lambda-proto` / `--lambda-rel` work as before.
+
+`--proto-bins {2,3,4,5,6,7}` chooses how many pseudo-classes the continuous score is
+binned into for those two clusters, since prototypes are per-class
+(`utils.bin_sentiment`), and `--proto-bin-mode {uniform,round}` chooses how the range
+is cut.
+
+- `uniform` (default) cuts [-3, 3] into equal segments of width `6/n_bins`,
+  left-closed, so a score sitting exactly on an edge goes to the upper bin. At 2 bins
+  that is `[-3,0)` and `(0,3]`; at 6, the edges are the integers.
+- `round` reproduces the Acc-7/Acc-5 binning these datasets are reported under. It
+  always centres a bin on 0, so it only accepts an odd count (2, 3, 5, 7) and raises
+  otherwise. Clipping at +-3 also leaves its two extreme bins half the width of the
+  interior ones, which starves them badly on a small train split.
+
+**The parity of `--proto-bins` decides where 0 goes, and that is the substantive
+choice:**
+
+- **Even** — 0 is a bin *edge*, so no prototype can mix negative with positive
+  scores. Left-closed bins would otherwise sweep every exact zero into the first
+  positive bin (47% of it on MOSEI at 6 bins), so the zeros are dropped instead,
+  keeping each prototype to a single polarity. That is what 2 bins has always done,
+  and it costs no support: MOSEI's smallest bin at 6 is 613 either way. Since the
+  reported metric *is* the sign, this is the better match.
+- **Odd** — 0 sits at the *centre* of the middle bin, which therefore mixes both
+  signs (6789 utterances on MOSEI at 7 bins). Nothing is dropped.
+
+Each prototype is a mean over its bin, so the useful ceiling is set by the train
+split, not by taste. Smallest bin in the train split, under `uniform`:
+
+| bins | parity | MOSI (1284 utts) | MOSEI (16326 utts) |
+| ---- | ------ | ---------------- | ------------------ |
+| 2    | even   | 552              | 4738               |
+| 3    | odd    | 303              | 2196               |
+| 4    | even   | 218              | 1616               |
+| 5    | odd    | 120              | 1018               |
+| 6    | even   | 67               | 613                |
+| 7    | odd    | 67               | 505                |
+
+Under `round` the same counts collapse to 53 / 38 / 24 on MOSI at 3 / 5 / 7 bins. A
+prototype is 1024-dimensional, so `round` at 7 bins would average 24 vectors in 1024
+dimensions — worse than `uniform` at 7 (67) and worse even than `round` at 3 (53).
+`uniform` is the default for that reason: this binning is an internal distillation
+detail, never a reported number, so there is nothing to gain from inheriting the
+Acc-7 convention's starved tails.
+
+The defaults are **6 bins on CMUMOSEI and 4 on CMUMOSI** — both even, so every
+prototype is one polarity, and both well supported (613 and 218; MOSI at 6 would drop
+to 67). The student prints the per-bin support every run plus a warning when the
+smallest bin falls under 100.
+
+`lr`/`l2` are carried over from MELD and have **not** been tuned on CMU yet.
 
 Key student flags: `--mask-type constant-<rate>` (missing-modality rate at train+eval
 time), `--prompt-type {none,constant,prototype}`, `--lambda-prob/--lambda-proto/

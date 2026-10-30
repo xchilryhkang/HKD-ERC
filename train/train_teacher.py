@@ -16,11 +16,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import path
-from src.utils import Logger, get_loaders, build_model, random_mask, generate_inputs, save_teacher_checkpoint, make_optimizer, set_seed
+from src.utils import (Logger, get_loaders, build_model, random_mask, generate_inputs,
+                       save_teacher_checkpoint, make_optimizer, set_seed, regression_metrics)
 from src.losses.loss import MaskedCELoss
 
 
-def train_or_eval_model(args, model, cls_loss, dataloader, mask_rate, optimizer=None, train=False):
+def train_or_eval_model(args, model, cls_loss, dataloader, mask_rate, optimizer=None,
+                        train=False, return_extra=False):
     preds, labels, masks = [], [], []
     losses = []
 
@@ -104,11 +106,22 @@ def train_or_eval_model(args, model, cls_loss, dataloader, mask_rate, optimizer=
     preds = np.concatenate(preds)
     labels = np.concatenate(labels)
     masks = np.concatenate(masks)
-    preds = np.argmax(preds, 1)
 
     avg_loss = round(np.sum(losses) / np.sum(masks), 4)
-    avg_acc = accuracy_score(labels, preds, sample_weight=masks)
-    avg_f1 = f1_score(labels, preds, sample_weight=masks, average='weighted')
+
+    if getattr(args, 'task', 'classification') == 'regression':
+        # One scalar per utterance; acc/F1 come from the sign of the non-zero
+        # gold scores (see utils.regression_metrics).
+        avg_acc, avg_f1, mae, corr = regression_metrics(labels, preds.reshape(-1), masks)
+        extra = {'mae': mae, 'corr': corr}
+    else:
+        preds = np.argmax(preds, 1)
+        avg_acc = accuracy_score(labels, preds, sample_weight=masks)
+        avg_f1 = f1_score(labels, preds, sample_weight=masks, average='weighted')
+        extra = {}
+
+    if return_extra:
+        return avg_acc, avg_f1, avg_loss, extra
     return avg_acc, avg_f1, avg_loss
 
 

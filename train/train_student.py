@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import path
 from src.utils import (
     Logger, get_loaders, build_model, random_mask, generate_inputs,
-    load_teacher_checkpoint, save_student_checkpoint, make_optimizer, set_seed
+    load_teacher_checkpoint, save_student_checkpoint, make_optimizer, set_seed,
+    regression_metrics, bin_sentiment
 )
 from src.losses.loss import MaskedCELoss
 from src.losses.kd_losses import (
@@ -96,16 +97,35 @@ def compute_teacher_prototypes(args, teacher, dataloader, adim, tdim, vdim):
             e_v = flatten_valid(h_final['e'], valid)                      # [N, hidden_dim]
             lab_v = label.reshape(-1)[valid]                             # [N]
 
+            if getattr(args, 'task', 'classification') == 'regression':
+                # Prototypes are per-class, so the continuous sentiment score
+                # is binned into args.proto_bins pseudo-classes -- the same
+                # binning train_or_eval_student applies, so the rows line up.
+                lab_v, keep = bin_sentiment(lab_v, getattr(args, 'proto_bins', 2),
+                                            getattr(args, 'proto_bin_mode', 'uniform'))
+                lab_v, r_v, e_v = lab_v[keep], r_v[keep], e_v[keep]
+
+            n_proto_cls = getattr(args, 'n_proto_classes', args.n_classes)
             if sums is None:
-                sums = torch.zeros(args.n_classes, D, device=r.device)
-                counts = torch.zeros(args.n_classes, device=r.device)
-                sums_e = torch.zeros(args.n_classes, e_v.size(-1), device=r.device)
+                sums = torch.zeros(n_proto_cls, D, device=r.device)
+                counts = torch.zeros(n_proto_cls, device=r.device)
+                sums_e = torch.zeros(n_proto_cls, e_v.size(-1), device=r.device)
             sums.index_add_(0, lab_v, r_v)
             sums_e.index_add_(0, lab_v, e_v)
             counts.index_add_(0, lab_v, torch.ones_like(lab_v, dtype=counts.dtype))
 
+    if getattr(args, 'task', 'classification') == 'regression':
+        # A prototype is a mean over its bin, so thin bins give noisy targets.
+        # Print the support so a too-large --proto-bins is visible, not silent.
+        n = [int(c) for c in counts]
+        print(f"  prototype bin support (train, {len(n)} "
+              f"{getattr(args, 'proto_bin_mode', 'uniform')} bins): {n}")
+        if min(n) < 100:
+            print(f'  WARNING: smallest bin has {min(n)} utterances for a '
+                  f'{int(sums.size(1))}-dim prototype -- consider fewer --proto-bins.')
+
     denom = counts.clamp(min=1).unsqueeze(1)
-    return sums / denom, sums_e / denom                                 # [n_classes, D], [n_classes, hidden_dim]
+    return sums / denom, sums_e / denom                                 # [n_proto_cls, D], [n_proto_cls, hidden_dim]
 
 
 def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
@@ -146,7 +166,7 @@ def calibrate_loss_scales(args, *fwd_args, **fwd_kwargs):
 
 
 def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss, proto_t, proto_t_e,
-                           ot_loss, ot_cost, node_rel_loss, dataloader, mask_rate, optimizer=None, train=False):
+                           ot_loss, ot_cost, node_rel_loss, dataloader, mask_rate, optimizer=None, train=False, return_extra=False):
     preds, labels, masks = [], [], []
     losses, losses_ce, losses_kd, losses_proto, losses_ot = [], [], [], [], []
     losses_e_proto, losses_node_rel = [], []
@@ -234,8 +254,10 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
         lp_ = log_prob_student.transpose(0, 1).contiguous().view(-1, log_prob_student.size(2))
         labels_ = label.view(-1)
 
+        regression = getattr(args, 'task', 'classification') == 'regression'
+
         loss_ce = cls_loss(lp_, labels_, umask)
-        loss_kd = kl_loss(log_prob_student, log_prob_teacher, umask)
+        lp_t_ = log_prob_teacher.transpose(0, 1).contiguous().view(-1, log_prob_teacher.size(2))
 
         # Flatten the 4 hypergraph nodes to valid utterances once; every
         # feature-level loss below is built from these.
@@ -246,19 +268,40 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
 
         r_s_v = torch.cat([hf_s_v['a'], hf_s_v['t'], hf_s_v['v'], hf_s_v['e']], dim=-1)
         r_t_v = torch.cat([hf_t_v['a'], hf_t_v['t'], hf_t_v['v'], hf_t_v['e']], dim=-1)
-        loss_proto = proto_loss(r_s_v, r_t_v, lab_v, proto_t)
 
-        loss_e_proto = proto_loss(hf_s_v['e'], hf_t_v['e'], lab_v, proto_t_e)
+        if regression:
+            # prob cluster: KL and Sinkhorn OT both need a distribution over
+            # classes, which the 1-wide regression head cannot produce. The
+            # student is matched to the teacher scalar instead (plain
+            # regression distillation) and OT drops out of the sum, so
+            # lambda_prob still scales the whole prob cluster.
+            loss_kd = cls_loss(lp_, lp_t_.detach(), umask)
+            loss_ot = torch.zeros((), device=lp_.device)
 
-        # Structural KD: how 'e' relates to a/t/v, within each model's own space.
+            # proto cluster: same binning compute_teacher_prototypes used.
+            lab_p, keep = bin_sentiment(lab_v, getattr(args, 'proto_bins', 2),
+                                        getattr(args, 'proto_bin_mode', 'uniform'))
+            if keep.any():
+                lab_p = lab_p[keep]
+                loss_proto = proto_loss(r_s_v[keep], r_t_v[keep], lab_p, proto_t)
+                loss_e_proto = proto_loss(hf_s_v['e'][keep], hf_t_v['e'][keep], lab_p, proto_t_e)
+            else:
+                loss_proto = torch.zeros((), device=lp_.device)
+                loss_e_proto = torch.zeros((), device=lp_.device)
+        else:
+            loss_kd = kl_loss(log_prob_student, log_prob_teacher, umask)
+            loss_proto = proto_loss(r_s_v, r_t_v, lab_v, proto_t)
+            loss_e_proto = proto_loss(hf_s_v['e'], hf_t_v['e'], lab_v, proto_t_e)
+
+            # exp(log_prob) recovers the softmax exactly (no temperature here,
+            # unlike kl_loss), so OT needs no raw logits from the model.
+            P = lp_t_[valid].exp()
+            Q = lp_[valid].exp()
+            loss_ot = ot_loss(P, Q, ot_cost)
+
+        # Structural KD: how 'e' relates to a/t/v, within each model own
+        # space. Label-free, so it is the one cluster regression leaves alone.
         loss_node_rel = node_rel_loss(hf_s_v, hf_t_v)
-
-        # exp(log_prob) recovers the softmax exactly (no temperature here,
-        # unlike kl_loss), so OT needs no raw logits from the model.
-        lp_t_ = log_prob_teacher.transpose(0, 1).contiguous().view(-1, log_prob_teacher.size(2))
-        P = lp_t_[valid].exp()
-        Q = lp_[valid].exp()
-        loss_ot = ot_loss(P, Q, ot_cost)
 
         # 4 clusters: CE (always weight 1), prob = KD+OT, proto, rel =
         # e_proto+node_rel. proto/rel are cosine-based and run far smaller
@@ -287,7 +330,6 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
     preds = np.concatenate(preds)
     labels = np.concatenate(labels)
     masks = np.concatenate(masks)
-    preds = np.argmax(preds, 1)
 
     avg_loss = round(np.sum(losses) / np.sum(masks), 4)
     avg_loss_ce = round(np.sum(losses_ce) / np.sum(masks), 4)
@@ -296,10 +338,18 @@ def train_or_eval_student(args, teacher, student, cls_loss, kl_loss, proto_loss,
     avg_loss_ot = round(np.sum(losses_ot) / np.sum(masks), 4)
     avg_loss_e_proto = round(np.sum(losses_e_proto) / np.sum(masks), 4)
     avg_loss_node_rel = round(np.sum(losses_node_rel) / np.sum(masks), 4)
-    avg_acc = accuracy_score(labels, preds, sample_weight=masks)
-    avg_f1 = f1_score(labels, preds, sample_weight=masks, average='weighted')
-    return (avg_acc, avg_f1, avg_loss, avg_loss_ce, avg_loss_kd, avg_loss_proto, avg_loss_ot,
-            avg_loss_e_proto, avg_loss_node_rel)
+    if getattr(args, 'task', 'classification') == 'regression':
+        avg_acc, avg_f1, mae, corr = regression_metrics(labels, preds.reshape(-1), masks)
+        extra = {'mae': mae, 'corr': corr}
+    else:
+        preds = np.argmax(preds, 1)
+        avg_acc = accuracy_score(labels, preds, sample_weight=masks)
+        avg_f1 = f1_score(labels, preds, sample_weight=masks, average='weighted')
+        extra = {}
+
+    out = (avg_acc, avg_f1, avg_loss, avg_loss_ce, avg_loss_kd, avg_loss_proto, avg_loss_ot,
+           avg_loss_e_proto, avg_loss_node_rel)
+    return out + (extra,) if return_extra else out
 
 
 if __name__ == '__main__':
