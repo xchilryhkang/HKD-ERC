@@ -20,6 +20,7 @@ from src.models.model import HypergraphERCModel
 from src.data.dataloader_iemocap import IEMOCAPDataset
 from src.data.dataloader_meld import MELDRobertaDataset
 from src.data.dataloader_cmu import CMUDataset
+from src.ablation import teacher_ckpt_tag
 
 import sys
 import copy
@@ -60,41 +61,61 @@ def save_model_state(args, model_state, save_root, folder_index, folder_f1, fold
     print(f'>>>>> Best model for folder {folder_index} saved to {model_path} >>>>>')
     return model_path
 
-def save_teacher_checkpoint(model_state, dataset, fold_index):
+def save_teacher_checkpoint(model_state, dataset, fold_index, ablate='none'):
     """
     Deterministic filename (no timestamp) so the student can find it by
     dataset + fold. Each fold's teacher must only have seen that fold's
     training sessions, or the student inherits a leak.
+
+    `ablate` tags the filename so an ablation teacher never overwrites the
+    baseline one. ablate='none' keeps the original path, so checkpoints
+    already on disk stay valid.
     """
     os.makedirs(path.TEACHER_DIR, exist_ok=True)
-    ckpt_path = os.path.join(path.TEACHER_DIR, f'{dataset.lower()}_fold{fold_index}_teacher.pt')
+    ckpt_path = os.path.join(
+        path.TEACHER_DIR,
+        f'{dataset.lower()}_fold{fold_index}_teacher{teacher_ckpt_tag(ablate)}.pt')
     torch.save(model_state, ckpt_path)
     print(f'>>>>> Teacher checkpoint for fold {fold_index} saved to {ckpt_path} >>>>>')
     return ckpt_path
 
 
-def load_teacher_checkpoint(dataset, fold_index, map_location=None):
+def load_teacher_checkpoint(dataset, fold_index, map_location=None, ablate='none'):
     """
     Load the teacher checkpoint saved by save_teacher_checkpoint for this
     dataset + fold_index. Raises a clear error if train_teacher.py hasn't
     been run for that fold yet.
+
+    `ablate` must name the teacher you want, NOT merely the student's own
+    setting: state_dict shapes are identical across the ablation grid, so a
+    mismatched checkpoint would load silently. The filename is the only
+    guard -- see src/ablation.py.
     """
-    ckpt_path = os.path.join(path.TEACHER_DIR, f'{dataset.lower()}_fold{fold_index}_teacher.pt')
+    tag = teacher_ckpt_tag(ablate)
+    ckpt_path = os.path.join(
+        path.TEACHER_DIR, f'{dataset.lower()}_fold{fold_index}_teacher{tag}.pt')
     assert os.path.exists(ckpt_path), (
         f'Teacher checkpoint not found: {ckpt_path}. '
-        f'Run train_teacher.py for dataset={dataset} first.'
+        f'Run train_teacher.py for dataset={dataset}'
+        + (f' with --ablate {ablate} first.' if ablate != 'none' else ' first.')
     )
     return torch.load(ckpt_path, map_location=map_location)
 
 
-def save_student_checkpoint(model_state, dataset, fold_index):
+def save_student_checkpoint(model_state, dataset, fold_index, ablate='none'):
     """
     Same convention as save_teacher_checkpoint, written to path.STUDENT_DIR
     instead — keeps student checkpoints from colliding with teacher ones
     for the same dataset/fold.
+
+    `ablate` tags the filename for the same reason it does on the teacher
+    side: without it every ablation run overwrites the baseline student,
+    and since output/ is gitignored there is nothing to recover from.
     """
     os.makedirs(path.STUDENT_DIR, exist_ok=True)
-    ckpt_path = os.path.join(path.STUDENT_DIR, f'{dataset.lower()}_fold{fold_index}_student.pt')
+    ckpt_path = os.path.join(
+        path.STUDENT_DIR,
+        f'{dataset.lower()}_fold{fold_index}_student{teacher_ckpt_tag(ablate)}.pt')
     torch.save(model_state, ckpt_path)
     print(f'>>>>> Student checkpoint for fold {fold_index} saved to {ckpt_path} >>>>>')
     return ckpt_path
@@ -461,6 +482,7 @@ def build_model(args, adim, tdim, vdim):
         vue_reliability_type=args.vue_reliability_type,
         use_vue_reliability_gate=args.use_vue_reliability_gate,
         hg_layers=args.hg_layers,
+        ablate=getattr(args, 'ablate', 'none'),
     )
 
     print("\nFull Model Architecture:")

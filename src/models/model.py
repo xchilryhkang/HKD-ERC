@@ -16,8 +16,9 @@ class HypergraphERCModel(nn.Module):
                  use_bilstm=True, prompt_type='none', n_proto=10, prompt_dim=None,
                  n_graph_heads=4, graph_layers=2, reliability_type='feature',
                  d_e=None, vue_reliability_type='feature', use_vue_reliability_gate=True,
-                 hg_layers=2, **kwargs):
+                 hg_layers=2, ablate='none', **kwargs):
         super(HypergraphERCModel, self).__init__()
+        self.ablate = ablate
         self.dataset = dataset
         self.no_cuda = no_cuda
         self.n_speakers = n_speakers
@@ -53,9 +54,9 @@ class HypergraphERCModel(nn.Module):
             self.lstm_t = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim // 2, num_layers=1, bidirectional=True, dropout=dropout)
             self.lstm_v = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim // 2, num_layers=1, bidirectional=True, dropout=dropout)
 
-        self.context_graph_a = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
-        self.context_graph_t = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
-        self.context_graph_v = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type)
+        self.context_graph_a = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type, ablate)
+        self.context_graph_t = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type, ablate)
+        self.context_graph_v = ContextGraphStack(hidden_dim, graph_layers, n_graph_heads, dropout, self.no_cuda, reliability_type, ablate)
 
         # hypergraph.py has no input projection: every node must already
         # share one dimension. d_e defaults to hidden_dim so that's
@@ -68,12 +69,26 @@ class HypergraphERCModel(nn.Module):
             f'context-graph output it concatenates with must already match.'
         )
 
-        self.vue = VUEFusion(
-            hidden_dim, self.d_e, modal_keys=('a', 't', 'v'),
-            reliability_type=vue_reliability_type, use_reliability_gate=use_vue_reliability_gate
-        )
+        # 'no-vue' replaces attention fusion with a plain linear map over the
+        # concatenated modalities. e still has to exist: the classifier
+        # concatenates 4 nodes, and loss_e_proto / loss_node_rel both read it.
+        # Projecting back to hidden_dim is what keeps the d_e assert above true.
+        self.ablate_vue = ablate == 'no-vue'
+        if self.ablate_vue:
+            self.vue_concat = nn.Linear(3 * hidden_dim, self.d_e)
+        else:
+            self.vue = VUEFusion(
+                hidden_dim, self.d_e, modal_keys=('a', 't', 'v'),
+                reliability_type=vue_reliability_type, use_reliability_gate=use_vue_reliability_gate
+            )
 
-        self.hypergraph = HypergraphStack(self.d_e, n_layers=hg_layers)
+        # 'no-hypergraph' leaves h_final = h_init, so the classifier reads the
+        # 4 unrefined nodes. Both distillation losses that read h_final still
+        # work; note that rho = [cos(e,a), cos(e,t), cos(e,v)] then collapses
+        # to a readout of VUE's own attention weights, since e is a convex
+        # combination of exactly those three vectors.
+        self.ablate_hypergraph = ablate == 'no-hypergraph'
+        self.hypergraph = HypergraphStack(self.d_e, n_layers=hg_layers, ablate=ablate)
 
 
         self.n_classes = n_classes
@@ -147,10 +162,19 @@ class HypergraphERCModel(nn.Module):
             't': outputs_mask_raw[:, :, 1],
             'v': outputs_mask_raw[:, :, 2],
         }
-        v_hat, gamma_vue = self.vue({'a': hidden0_a, 't': hidden0_t, 'v': hidden0_v}, availability)
+        if self.ablate_vue:
+            v_hat = self.vue_concat(torch.cat([hidden0_a, hidden0_t, hidden0_v], dim=-1))
+            gamma_vue = torch.full(
+                (*v_hat.shape[:-1], 3), 1.0 / 3.0,
+                device=v_hat.device, dtype=v_hat.dtype)
+        else:
+            v_hat, gamma_vue = self.vue({'a': hidden0_a, 't': hidden0_t, 'v': hidden0_v}, availability)
 
         h_init = {'a': hidden0_a, 't': hidden0_t, 'v': hidden0_v, 'e': v_hat}
-        h_final, gammas_hg = self.hypergraph(h_init)
+        if self.ablate_hypergraph:
+            h_final, gammas_hg = h_init, []
+        else:
+            h_final, gammas_hg = self.hypergraph(h_init)
 
         concat_features = torch.cat(
             [h_final['a'], h_final['t'], h_final['v'], h_final['e']], dim=-1

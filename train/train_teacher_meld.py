@@ -18,6 +18,7 @@ from src import path
 from src.utils import Logger, get_loaders_meld, build_model, save_teacher_checkpoint, make_optimizer, set_seed, compute_class_weights
 from src.losses.loss import MaskedCELoss
 from train.train_teacher import train_or_eval_model
+from src.ablation import add_ablate_args
 
 
 if __name__ == '__main__':
@@ -47,6 +48,7 @@ if __name__ == '__main__':
     parser.add_argument('--disable-vue-reliability-gate', action='store_true', default=False)
     parser.add_argument('--hg-layers', type=int, default=1)
     parser.add_argument('--seed', type=int, default=50)
+    add_ablate_args(parser)
     parser.add_argument('--class-weight', type=str, default='none',
                         choices=['none', 'inverse', 'inverse-sqrt'],
                         help='Re-weight CE by inverse class frequency of the TRAIN split '
@@ -141,6 +143,7 @@ if __name__ == '__main__':
           f'test_f1={test_fscore:.4f}, test_acc={test_acc:.4f}, '
           f'duration={time.time()-start_time:.2f}s >>>>>')
 
-    save_teacher_checkpoint(best_model_state, args.dataset, fold_index=0)
+    save_teacher_checkpoint(best_model_state, args.dataset, fold_index=0,
+                            ablate=args.ablate)
 
     print(f'\n====== Teacher summary (MELD): test F1={test_fscore:.4f}, test acc={test_acc:.4f} ======')

@@ -18,6 +18,7 @@ from src import path
 from src.utils import Logger, get_loaders, build_model, save_teacher_checkpoint, make_optimizer, set_seed, compute_class_weights
 from src.losses.loss import MaskedCELoss
 from train.train_teacher import train_or_eval_model
+from src.ablation import add_ablate_args
 
 
 if __name__ == '__main__':
@@ -49,6 +50,7 @@ if __name__ == '__main__':
     parser.add_argument('--disable-vue-reliability-gate', action='store_true', default=False)
     parser.add_argument('--hg-layers', type=int, default=1)
     parser.add_argument('--seed', type=int, default=50)
+    add_ablate_args(parser)
     parser.add_argument('--class-weight', type=str, default='none',
                         choices=['none', 'inverse', 'inverse-sqrt'],
                         help='Re-weight CE by inverse class frequency of the TRAIN split '
@@ -152,7 +154,8 @@ if __name__ == '__main__':
         fold_f1.append(best_sessionout_fscore)
         fold_acc.append(best_sessionout_acc)
 
-        save_teacher_checkpoint(best_model_state, args.dataset, fold_index=ii)
+        save_teacher_checkpoint(best_model_state, args.dataset, fold_index=ii,
+                                ablate=args.ablate)
 
     print(f'\n====== Teacher summary (5-fold leave-one-session-out CV): '
           f'mean session-out F1={np.mean(fold_f1):.4f}, mean session-out acc={np.mean(fold_acc):.4f} ======')

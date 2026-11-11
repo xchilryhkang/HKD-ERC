@@ -20,6 +20,7 @@ from src.utils import (
     Logger, get_loaders, build_model, load_teacher_checkpoint, save_student_checkpoint, make_optimizer, set_seed
 )
 from src.losses.loss import MaskedCELoss
+from src.ablation import add_ablate_args, resolve_teacher_ablate
 from src.losses.kd_losses import (
     MaskedKLLoss, PrototypeRelationLoss, SinkhornOTLoss, compute_ot_cost_matrix, NodeRelationLoss
 )
@@ -90,6 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--early-stop-delta', type=float, default=0.001)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--seed', type=int, default=50)
+    add_ablate_args(parser, student=True)
     parser.add_argument('--loss-norm', type=str, default='none', choices=['none', 'calibrated'],
                         help="'calibrated' rescales proto/rel to CE's scale once per run, so their "
                              'lambdas are meaningful in [0, 1] (see train_student.calibrate_loss_scales).')
@@ -103,6 +105,7 @@ if __name__ == '__main__':
                              'student lr/l2 sweep has been run).')
 
     args = parser.parse_args()
+    teacher_ablate = resolve_teacher_ablate(args)
     args.use_bilstm = not args.disable_bilstm
     args.use_vue_reliability_gate = not args.disable_vue_reliability_gate
     mask_rate = float(args.mask_type.split('-')[-1])
@@ -148,7 +151,8 @@ if __name__ == '__main__':
         teacher_args = copy.deepcopy(args)
         teacher_args.prompt_type = 'none'
         teacher = build_model(teacher_args, adim, tdim, vdim)
-        teacher_state = load_teacher_checkpoint(args.dataset, fold_index=ii, map_location=args.device)
+        teacher_state = load_teacher_checkpoint(args.dataset, fold_index=ii, map_location=args.device,
+                                                ablate=teacher_ablate)
         teacher.load_state_dict(teacher_state)
         if cuda:
             teacher.cuda()
@@ -230,7 +234,8 @@ if __name__ == '__main__':
         fold_f1.append(best_sessionout_fscore)
         fold_acc.append(best_sessionout_acc)
 
-        save_student_checkpoint(best_model_state, args.dataset, fold_index=ii)
+        save_student_checkpoint(best_model_state, args.dataset, fold_index=ii,
+                                ablate=args.ablate)
 
     print(f'\n====== Student summary (5-fold leave-one-session-out CV): '
           f'mean session-out F1={np.mean(fold_f1):.4f}, mean session-out acc={np.mean(fold_acc):.4f} ======')

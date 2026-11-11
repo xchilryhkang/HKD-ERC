@@ -23,7 +23,16 @@ class HypergraphConvLayer(nn.Module):
     }
     NODE_TYPES = ('a', 't', 'v', 'e')
 
-    def __init__(self, hidden_dim):
+    # Ablation subsets. Dropping one family rewires `_incident` and the
+    # degrees, but touches no parameter, so state_dict shapes are unchanged:
+    #   no-ind-edges  -> deg(a,t,v) = 2, deg(e) = 3   (pairwise only)
+    #   no-coup-edges -> deg(a,t,v) = 1, deg(e) = 3   (a star through e)
+    ABLATE_EDGE_SUBSETS = {
+        'no-ind-edges': ('coup_at', 'coup_av', 'coup_tv'),
+        'no-coup-edges': ('ind_a', 'ind_t', 'ind_v'),
+    }
+
+    def __init__(self, hidden_dim, ablate='none'):
         super(HypergraphConvLayer, self).__init__()
         self.d_h = hidden_dim
 
@@ -32,23 +41,30 @@ class HypergraphConvLayer(nn.Module):
         self.w_v = nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.w_o = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
+        keep = self.ABLATE_EDGE_SUBSETS.get(ablate)
+        self.hyperedges = (self.HYPEREDGES if keep is None
+                           else {k: self.HYPEREDGES[k] for k in keep})
+
         # node type -> incident hyperedge names, and its (fixed) degree
         self._incident = {
-            u: [name for name, members in self.HYPEREDGES.items() if u in members]
+            u: [name for name, members in self.hyperedges.items() if u in members]
             for u in self.NODE_TYPES
         }
         self.degree = {u: len(names) for u, names in self._incident.items()}  # {'a':3,'t':3,'v':3,'e':6}
+        assert min(self.degree.values()) >= 1, (
+            f'ablate={ablate!r} leaves a node with no incident hyperedge: {self.degree}')
 
     def forward(self, h):
         """
         h {'a','t','v','e': [T, B, hidden_dim]} -> (h_new, gamma_dict), where
-        gamma_dict[edge] is [T, B, |members|] in HYPEREDGES[edge] order.
+        gamma_dict[edge] is [T, B, |members|] in self.hyperedges[edge] order
+        (== HYPEREDGES[edge] unless an edge family was ablated away).
         """
         q_e = self.w_q(h['e'])  # [T, B, D_h] — VUE's own query, reused by every hyperedge
 
         m_e = {}
         gamma_dict = {}
-        for ename, members in self.HYPEREDGES.items():
+        for ename, members in self.hyperedges.items():
             scores, values = [], []
             for u in members:
                 k_u = self.w_k(h[u])
@@ -74,11 +90,11 @@ class HypergraphConvLayer(nn.Module):
 class HypergraphStack(nn.Module):
     """`n_layers` rounds of HypergraphConvLayer, not weight-tied."""
 
-    def __init__(self, hidden_dim, n_layers=2):
+    def __init__(self, hidden_dim, n_layers=2, ablate='none'):
         super(HypergraphStack, self).__init__()
         assert n_layers >= 1, f'n_layers must be >= 1, got {n_layers}'
         self.layers = nn.ModuleList([
-            HypergraphConvLayer(hidden_dim) for _ in range(n_layers)
+            HypergraphConvLayer(hidden_dim, ablate) for _ in range(n_layers)
         ])
 
     def forward(self, h):

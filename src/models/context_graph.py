@@ -21,7 +21,8 @@ class ContextGraphLayer(nn.Module):
         x_out   = LayerNorm( x_i + W_o concat_k sum_j alpha^k W_v^k x_j )
     """
 
-    def __init__(self, hidden_dim, n_heads=4, dropout=0.5, reliability_type='feature'):
+    def __init__(self, hidden_dim, n_heads=4, dropout=0.5, reliability_type='feature',
+                 ablate='none'):
         super(ContextGraphLayer, self).__init__()
         assert hidden_dim % n_heads == 0, (
             f'hidden_dim ({hidden_dim}) must be divisible by n_heads ({n_heads})'
@@ -32,6 +33,14 @@ class ContextGraphLayer(nn.Module):
         self.n_heads = n_heads
         self.head_dim = hidden_dim // n_heads
         self.reliability_type = reliability_type
+
+        # Ablation: a dropped prior is pinned to 1 (log-prior 0), which is
+        # the identity for the softmax. Its parameters stay allocated and
+        # simply receive no gradient, so state_dict shapes do not move --
+        # see src/ablation.py on why that matters.
+        self.use_temporal = ablate != 'no-temporal'
+        self.use_speaker = ablate != 'no-speaker'
+        self.use_uncertainty = ablate != 'no-uncertainty'
 
         # ---- content attention (per head, packed as one Linear each) ---- #
         self.w_q = nn.Linear(hidden_dim, hidden_dim, bias=False)
@@ -68,22 +77,32 @@ class ContextGraphLayer(nn.Module):
 
         availability = availability.to(features.dtype)
 
-        beta = torch.sigmoid(self.theta_beta)
-        same_speaker = (features_speaker_ids[src] == features_speaker_ids[dst]).to(features.dtype)
-        w_S = same_speaker + (1 - same_speaker) * beta  # [E]
+        if self.use_speaker:
+            beta = torch.sigmoid(self.theta_beta)
+            same_speaker = (features_speaker_ids[src] == features_speaker_ids[dst]).to(features.dtype)
+            w_S = same_speaker + (1 - same_speaker) * beta  # [E]
+        else:
+            w_S = torch.ones(src.size(0), device=features.device, dtype=features.dtype)
 
         # Reliability is computed once per NODE then gathered per edge, which
         # avoids running the MLP once per edge (edges far outnumber nodes).
-        if self.reliability_type == 'scalar':
-            reliability = torch.sigmoid(self.theta_rho).expand(N)
+        if not self.use_uncertainty:
+            w_R = torch.ones(src.size(0), device=features.device, dtype=features.dtype)
         else:
-            reliability = torch.sigmoid(self.reliability_mlp(features)).squeeze(-1)
-        w_R_node = availability + (1 - availability) * reliability  # 1 if present
-        w_R = w_R_node[src]  # [E]
+            if self.reliability_type == 'scalar':
+                reliability = torch.sigmoid(self.theta_rho).expand(N)
+            else:
+                reliability = torch.sigmoid(self.reliability_mlp(features)).squeeze(-1)
+            w_R_node = availability + (1 - availability) * reliability  # 1 if present
+            w_R = w_R_node[src]  # [E]
 
-        sigma = F.softplus(self.eta)  # [K], > 0
-        dt2 = (features_node_positions[src] - features_node_positions[dst]).to(features.dtype) ** 2  # [E]
-        w_T = torch.exp(-dt2.unsqueeze(-1) / (2 * sigma.unsqueeze(0) ** 2))  # [E, K]
+        if self.use_temporal:
+            sigma = F.softplus(self.eta)  # [K], > 0
+            dt2 = (features_node_positions[src] - features_node_positions[dst]).to(features.dtype) ** 2  # [E]
+            w_T = torch.exp(-dt2.unsqueeze(-1) / (2 * sigma.unsqueeze(0) ** 2))  # [E, K]
+        else:
+            w_T = torch.ones(src.size(0), self.n_heads,
+                             device=features.device, dtype=features.dtype)
 
         prior = w_T * (w_S * w_R).unsqueeze(-1)  # [E, K]
         log_prior = torch.log(prior.clamp(min=1e-8))
@@ -114,12 +133,17 @@ class ContextGraphStack(nn.Module):
     """`n_layers` rounds of ContextGraphLayer, hidden_dim -> hidden_dim, not weight-tied."""
 
     def __init__(self, hidden_dim, n_layers=2, n_heads=4, dropout=0.5, no_cuda=False,
-                 reliability_type='feature'):
+                 reliability_type='feature', ablate='none'):
         super(ContextGraphStack, self).__init__()
         assert n_layers >= 1, f'graph_layers must be >= 1, got {n_layers}'
         self.no_cuda = no_cuda
+        # 'no-context-graph' skips the attention layers but NOT the trailing
+        # utterance_to_conversation reshape, which the rest of the model
+        # depends on for its [T, B, D] layout. The layers stay built so the
+        # state_dict keeps its shape.
+        self.skip_layers = ablate == 'no-context-graph'
         self.layers = nn.ModuleList([
-            ContextGraphLayer(hidden_dim, n_heads, dropout, reliability_type)
+            ContextGraphLayer(hidden_dim, n_heads, dropout, reliability_type, ablate)
             for _ in range(n_layers)
         ])
 
@@ -127,8 +151,9 @@ class ContextGraphStack(nn.Module):
                 availability, seq_lengths, umask):
         """features [N, hidden_dim] (flat, per modality) -> [T, B, hidden_dim]."""
         x = features
-        for layer in self.layers:
-            x = layer(x, edge_index, features_speaker_ids, features_node_positions, availability)
+        if not self.skip_layers:
+            for layer in self.layers:
+                x = layer(x, edge_index, features_speaker_ids, features_node_positions, availability)
 
         out = utterance_to_conversation(x, seq_lengths, umask, self.no_cuda)  # [T, B, hidden_dim]
         return out

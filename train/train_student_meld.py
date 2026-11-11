@@ -20,6 +20,7 @@ from src.utils import (
     Logger, get_loaders_meld, build_model, load_teacher_checkpoint, save_student_checkpoint, make_optimizer, set_seed
 )
 from src.losses.loss import MaskedCELoss
+from src.ablation import add_ablate_args, resolve_teacher_ablate
 from src.losses.kd_losses import (
     MaskedKLLoss, PrototypeRelationLoss, SinkhornOTLoss, compute_ot_cost_matrix, NodeRelationLoss
 )
@@ -88,6 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('--early-stop-delta', type=float, default=0.001)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--seed', type=int, default=50)
+    add_ablate_args(parser, student=True)
     parser.add_argument('--loss-norm', type=str, default='none', choices=['none', 'calibrated'],
                         help="'calibrated' rescales proto/rel to CE's scale once per run, so their "
                              'lambdas are meaningful in [0, 1] (see train_student.calibrate_loss_scales).')
@@ -106,6 +108,7 @@ if __name__ == '__main__':
     args.num_folder = 1
     args.n_classes = 7
     args.n_speakers = 9
+    teacher_ablate = resolve_teacher_ablate(args)
     args.use_bilstm = not args.disable_bilstm
     args.use_vue_reliability_gate = not args.disable_vue_reliability_gate
     mask_rate = float(args.mask_type.split('-')[-1])
@@ -139,7 +142,8 @@ if __name__ == '__main__':
     teacher_args = copy.deepcopy(args)
     teacher_args.prompt_type = 'none'
     teacher = build_model(teacher_args, adim, tdim, vdim)
-    teacher_state = load_teacher_checkpoint(args.dataset, fold_index=0, map_location=args.device)
+    teacher_state = load_teacher_checkpoint(args.dataset, fold_index=0, map_location=args.device,
+                                            ablate=teacher_ablate)
     teacher.load_state_dict(teacher_state)
     if cuda:
         teacher.cuda()
@@ -225,6 +229,7 @@ if __name__ == '__main__':
           f'test_f1={test_fscore:.4f}, test_acc={test_acc:.4f}, '
           f'duration={time.time()-start_time:.2f}s >>>>>')
 
-    save_student_checkpoint(best_model_state, args.dataset, fold_index=0)
+    save_student_checkpoint(best_model_state, args.dataset, fold_index=0,
+                            ablate=args.ablate)
 
     print(f'\n====== Student summary (MELD): test F1={test_fscore:.4f}, test acc={test_acc:.4f} ======')
