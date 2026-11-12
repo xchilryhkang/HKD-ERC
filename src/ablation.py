@@ -16,10 +16,17 @@ load_teacher_checkpoint resolves the path from --teacher-ablate rather
 than trusting whatever is on disk.
 """
 
+# 'no-priors' is the middle rung of the context-graph ladder:
+#   baseline         logit = content + log(w_T * w_S * w_R)
+#   no-priors        logit = content                 <- plain windowed attention
+#   no-context-graph no attention at all
+# The three single-prior ablations cannot substitute for it, because the
+# priors multiply and can compensate for one another.
 ABLATE_CHOICES = (
     'none',
     # --- group 1: context graph ---
     'no-context-graph',   # skip the attention layers, keep the [N,D] -> [T,B,D] reshape
+    'no-priors',          # all three at once: log_prior = 0, i.e. plain windowed attention
     'no-temporal',        # w_T = 1  (drops the LEARNED decay; the hard +-window stays)
     'no-speaker',         # w_S = 1
     'no-uncertainty',     # w_R = 1

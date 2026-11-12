@@ -38,9 +38,11 @@ class ContextGraphLayer(nn.Module):
         # the identity for the softmax. Its parameters stay allocated and
         # simply receive no gradient, so state_dict shapes do not move --
         # see src/ablation.py on why that matters.
-        self.use_temporal = ablate != 'no-temporal'
-        self.use_speaker = ablate != 'no-speaker'
-        self.use_uncertainty = ablate != 'no-uncertainty'
+        # 'no-priors' pins all three, leaving logit = content: the layer
+        # degenerates to plain multi-head attention over the hard window.
+        self.use_temporal = ablate not in ('no-temporal', 'no-priors')
+        self.use_speaker = ablate not in ('no-speaker', 'no-priors')
+        self.use_uncertainty = ablate not in ('no-uncertainty', 'no-priors')
 
         # ---- content attention (per head, packed as one Linear each) ---- #
         self.w_q = nn.Linear(hidden_dim, hidden_dim, bias=False)
